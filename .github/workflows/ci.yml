@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet:
+    name: .NET tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore CreativeLongform.sln
+
+      - name: Build
+        run: dotnet build CreativeLongform.sln --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test CreativeLongform.sln --no-build --configuration Release --verbosity normal
+        # Api.Tests uses Testcontainers (PostgreSQL); Docker is available on ubuntu-latest.
+
+  angular:
+    name: Angular tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: browser-actions/setup-chrome@v1
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Unit tests (Karma + Chrome headless)
+        working-directory: web
+        run: npm run test:ci

@@ -1,0 +1,65 @@
+<section class="scene-workflow">
+  <header>
+    <h1>Creative Longform</h1>
+    <p class="subtitle">Load scenes from OData, run the pipeline, and watch SignalR progress.</p>
+    @if (selectedBookId) {
+      <p><a [routerLink]="['/book', selectedBookId]">Story &amp; world settings</a></p>
+    }
+  </header>
+
+  <div class="actions">
+    <button type="button" (click)="loadBooks()" [disabled]="busy">Reload books</button>
+    <button type="button" (click)="startGeneration()" [disabled]="busy || !selectedSceneId">
+      Start generation
+    </button>
+  </div>
+
+  @if (error) {
+    <p class="error">{{ error }}</p>
+  }
+
+  <div class="scene-pick">
+    <label for="scene-select">Scene</label>
+    <select id="scene-select" [value]="selectedSceneId ?? ''" (change)="selectScene($event)">
+      @for (row of scenesForUi(); track row.scene.id) {
+        <option [value]="row.scene.id">{{ row.label }}</option>
+      }
+    </select>
+  </div>
+
+  @if (selectedBookId && selectedSceneId) {
+    <section class="world-links">
+      <h2>World elements for this scene</h2>
+      <p class="hint">Checked items are injected into generation prompts as canon.</p>
+      @if (worldElements.length === 0) {
+        <p>No world elements for this book. Add them under Story &amp; world settings.</p>
+      }
+      <ul class="world-list">
+        @for (el of worldElements; track el.id) {
+          <li>
+            <label>
+              <input
+                type="checkbox"
+                [checked]="isWorldSelected(el.id)"
+                (change)="toggleWorld(el.id, $event)"
+                [disabled]="worldBusy"
+              />
+              <span class="we-title">{{ el.kind }} — {{ el.title }}</span>
+              <span class="we-sum">{{ el.summary }}</span>
+            </label>
+          </li>
+        }
+      </ul>
+      <button type="button" (click)="saveSceneWorld()" [disabled]="worldBusy">Save scene links</button>
+    </section>
+  }
+
+  <section class="log" aria-live="polite">
+    <h2>Log</h2>
+    <ul>
+      @for (line of logLines; track $index) {
+        <li>{{ line }}</li>
+      }
+    </ul>
+  </section>
+</section>

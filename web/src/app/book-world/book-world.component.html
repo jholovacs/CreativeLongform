@@ -1,0 +1,137 @@
+<section class="book-world">
+  <nav><a routerLink="/">← Scenes</a></nav>
+  <h1>Story & world</h1>
+  @if (book) {
+    <p class="meta">Book: {{ book.title }}</p>
+  }
+
+  @if (error) {
+    <p class="error">{{ error }}</p>
+  }
+
+  <section class="panel measurement">
+    <h2>Units &amp; calendar</h2>
+    <p class="hint">
+      Presets add Earth-like defaults to generation prompts. Custom rows override or extend (especially with
+      &quot;Custom&quot; preset).
+    </p>
+    <label for="preset">Measurement preset</label>
+    <select id="preset" [(ngModel)]="measurementPreset" [disabled]="busy">
+      <option [ngValue]="0">Earth — metric / SI</option>
+      <option [ngValue]="1">Earth — US customary</option>
+      <option [ngValue]="2">Custom</option>
+    </select>
+
+    <h3 class="sub">Calendar overrides</h3>
+    <div class="row">
+      <label for="dpy">Days per year</label>
+      <input id="dpy" type="number" [(ngModel)]="calDaysPerYear" [disabled]="busy" />
+      <label for="dpw">Days per week</label>
+      <input id="dpw" type="number" [(ngModel)]="calDaysPerWeek" [disabled]="busy" />
+    </div>
+    <label for="months">Month names (comma-separated)</label>
+    <input id="months" type="text" [(ngModel)]="monthNamesCsv" [disabled]="busy" />
+    <label for="weekdays">Weekday names (comma-separated)</label>
+    <input id="weekdays" type="text" [(ngModel)]="weekdayNamesCsv" [disabled]="busy" />
+
+    <h3 class="sub">Custom units</h3>
+    <table class="units-table">
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Name</th>
+          <th>Symbol</th>
+          <th>Definition</th>
+          <th>SI anchor (optional)</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (u of measurementPayload.units ?? []; track $index) {
+          <tr>
+            <td><input [(ngModel)]="u.category" [name]="'uc' + $index" [disabled]="busy" /></td>
+            <td><input [(ngModel)]="u.name" [name]="'un' + $index" [disabled]="busy" /></td>
+            <td><input [(ngModel)]="u.symbol" [name]="'us' + $index" [disabled]="busy" /></td>
+            <td><input class="wide" [(ngModel)]="u.definition" [name]="'ud' + $index" [disabled]="busy" /></td>
+            <td><input [(ngModel)]="u.approximateSiNote" [name]="'ua' + $index" [disabled]="busy" /></td>
+            <td><button type="button" (click)="removeUnitRow($index)" [disabled]="busy">Remove</button></td>
+          </tr>
+        }
+      </tbody>
+    </table>
+    <button type="button" (click)="addUnitRow()" [disabled]="busy">Add unit</button>
+
+    <h3 class="sub">Money / currency</h3>
+    <table class="units-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Definition</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (m of measurementPayload.money ?? []; track $index) {
+          <tr>
+            <td><input [(ngModel)]="m.name" [name]="'mn' + $index" [disabled]="busy" /></td>
+            <td><input class="wide" [(ngModel)]="m.definition" [name]="'md' + $index" [disabled]="busy" /></td>
+            <td><button type="button" (click)="removeMoneyRow($index)" [disabled]="busy">Remove</button></td>
+          </tr>
+        }
+      </tbody>
+    </table>
+    <button type="button" (click)="addMoneyRow()" [disabled]="busy">Add money entry</button>
+
+    <label for="mnotes">Notes (optional)</label>
+    <textarea id="mnotes" rows="2" [(ngModel)]="measurementPayload.notes" [disabled]="busy"></textarea>
+
+    <button type="button" (click)="saveMeasurement()" [disabled]="busy">Save units &amp; calendar</button>
+  </section>
+
+  <section class="panel">
+    <h2>Story tone & style</h2>
+    <label for="tone">Tone and style (used in all generation prompts)</label>
+    <textarea id="tone" rows="3" [(ngModel)]="tone" [disabled]="busy"></textarea>
+    <label for="notes">Content style notes (optional)</label>
+    <textarea id="notes" rows="2" [(ngModel)]="contentNotes" [disabled]="busy"></textarea>
+    <button type="button" (click)="saveTone()" [disabled]="busy">Save</button>
+  </section>
+
+  <section class="panel">
+    <h2>LLM world-building</h2>
+    <label for="extract">Paste text to extract canon from</label>
+    <textarea id="extract" rows="5" [(ngModel)]="extractText" [disabled]="busy"></textarea>
+    <button type="button" (click)="runExtract()" [disabled]="busy">Extract entries</button>
+
+    <label for="gen">Prompt to generate new entries</label>
+    <textarea id="gen" rows="3" [(ngModel)]="generatePrompt" [disabled]="busy"></textarea>
+    <button type="button" (click)="runGenerate()" [disabled]="busy">Generate entries</button>
+  </section>
+
+  <section class="panel">
+    <h2>World elements</h2>
+    @if (elements.length === 0) {
+      <p>No entries yet. Extract or generate above, or add via API/OData.</p>
+    }
+    <table>
+      <thead>
+        <tr>
+          <th>Kind</th>
+          <th>Title</th>
+          <th>Summary</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (el of elements; track el.id) {
+          <tr>
+            <td>{{ el.kind }}</td>
+            <td>{{ el.title }}</td>
+            <td>{{ el.summary }}</td>
+            <td>{{ el.status }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </section>
+</section>

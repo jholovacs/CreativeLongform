@@ -1,0 +1,6 @@
+@CreativeLongform.Api_HostAddress = http://localhost:5094
+
+GET {{CreativeLongform.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
