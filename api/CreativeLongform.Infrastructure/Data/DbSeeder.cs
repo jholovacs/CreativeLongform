@@ -40,6 +40,7 @@ public static class DbSeeder
             ChapterId = chapterId,
             Order = 1,
             Title = "Opening scene",
+            Synopsis = string.Empty,
             Instructions =
                 "Two characters meet in a quiet café. Establish tension through dialogue and small gestures. End on an unresolved question.",
             ExpectedEndStateNotes = "Both remain seated; neither has agreed to the proposal."

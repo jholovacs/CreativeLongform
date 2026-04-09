@@ -23,12 +23,15 @@ public static class WorldContextBuilder
             sb.AppendLine($"Story tone and style: {book.StoryToneAndStyle}");
         if (!string.IsNullOrWhiteSpace(book.ContentStyleNotes))
             sb.AppendLine($"Content style notes: {book.ContentStyleNotes}");
+        if (!string.IsNullOrWhiteSpace(book.Synopsis))
+            sb.AppendLine($"Synopsis: {book.Synopsis}");
 
         if (elements.Count == 0)
             return sb.ToString().TrimEnd();
 
         sb.AppendLine();
-        sb.AppendLine("Linked world-building (respect; do not contradict established facts):");
+        sb.AppendLine(
+            "Linked world-building — only these world elements are linked to this scene (respect; do not contradict established facts):");
         foreach (var group in elements.GroupBy(e => e.Kind).OrderBy(g => g.Key))
         {
             sb.AppendLine($"[{group.Key}]");

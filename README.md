@@ -13,12 +13,27 @@ Everything can run in Docker: Postgres, Ollama, the API, and **nginx** serving t
 
 ### Full stack
 
+**First-time or fresh deploy (recommended):** interactive Ollama CPU vs GPU (when NVIDIA is available), model choice, then build and start everything:
+
 ```bash
-make docker-up
+make setup
+```
+
+This writes a local `.env` with `OLLAMA_MODEL` (used for `Ollama__WriterModel` / `Ollama__CriticModel` in Compose) and, if you choose GPU, a gitignored `docker-compose.override.yml` that adds `gpus: all` to the Ollama service. It runs `docker compose up -d --build` and pulls the selected model into the Ollama volume.
+
+In **GPU** mode, setup reads total VRAM for the first GPU (`nvidia-smi`) and only lists curated models that fit: **Qwen2.5 14B instruct (Q4_K_M)** (`qwen2.5:14b-instruct-q4_K_M`), **Mistral Nemo 12B instruct (Q4_K_M)** (`mistral-nemo:12b-instruct-2407-q4_K_M`), and **Gemma3 27B instruct (Q3_K_M)** (`gemma3:27b-instruct-q3_K_M`).
+
+**Manual / repeat deploy** (same Compose files and `.env` as above)—rebuilds the API and web **Docker images** and restarts containers:
+
+```bash
+make deploy
+# same as: make docker-up
 # or: docker compose up -d --build
 ```
 
-Then:
+`make build` runs `dotnet build` and `npm run build` in `web/` (compile only on your machine). It does **not** rebuild Docker images or redeploy the stack; use **`make deploy`** after changing code you want running in Docker.
+
+If you did not use `make setup`, pull a model after the stack is up:
 
 1. **Pull a model** into the Ollama container (first time only; models persist in the `ollama` volume):
 
@@ -37,12 +52,13 @@ Then:
    | [http://localhost:5094/swagger](http://localhost:5094/swagger) | API directly (bypass nginx) |
    | [http://localhost:11434](http://localhost:11434) | Ollama (host port; optional) |
 
-3. Align **`Ollama:WriterModel`** and **`Ollama:CriticModel`** with the model you pulled (defaults in [appsettings.json](api/CreativeLongform.Api/appsettings.json) are `llama3.2`).
+3. Align **`Ollama:WriterModel`** and **`Ollama:CriticModel`** with the model you pulled. With Docker Compose, set `OLLAMA_MODEL` in `.env` (see `make setup`) or override in Compose; [appsettings.json](api/CreativeLongform.Api/appsettings.json) defaults apply when not using Compose.
 
 The API container uses:
 
 - `ConnectionStrings__Default` → Postgres service `postgres`
 - `Ollama__BaseUrl` → `http://ollama:11434/api`
+- `Ollama__WriterModel` / `Ollama__CriticModel` → `${OLLAMA_MODEL:-llama3.2}` from `.env` when present
 - `DisableHttpsRedirection` → `true` (HTTP behind nginx)
 - `ASPNETCORE_ENVIRONMENT=Development` so migrations and dev seed run on startup
 

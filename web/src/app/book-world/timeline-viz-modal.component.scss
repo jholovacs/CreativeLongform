@@ -1,0 +1,260 @@
+.timeline-viz-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1100;
+}
+
+.timeline-viz-dialog {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1101;
+  width: min(960px, calc(100vw - 2rem));
+  max-height: min(85vh, 640px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.25);
+  padding: 0.75rem 1rem 1rem;
+}
+
+.timeline-viz-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+
+  h2 {
+    margin: 0;
+    font-size: 1.2rem;
+  }
+}
+
+.timeline-viz-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.toolbar-btn {
+  min-width: 2rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 1rem;
+  line-height: 1.2;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.toolbar-btn:hover {
+  background: var(--border);
+}
+
+.toolbar-close {
+  margin-left: 0.25rem;
+  border: none;
+  background: transparent;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.35rem;
+  color: var(--muted);
+}
+
+.timeline-viz-dialog .hint {
+  margin: 0.5rem 0 0.75rem;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.empty {
+  margin: 1rem 0;
+  color: var(--muted);
+}
+
+.timeline-viz-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 220px;
+  max-height: 420px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(80, 120, 200, 0.06) 0%, rgba(80, 120, 200, 0.02) 50%, rgba(160, 90, 160, 0.05) 100%);
+  cursor: grab;
+  touch-action: none;
+}
+
+.timeline-viz-viewport:active {
+  cursor: grabbing;
+}
+
+.timeline-viz-world {
+  position: relative;
+  min-height: 200px;
+  height: 100%;
+  transform-origin: 0 50%;
+  will-change: transform;
+  padding: 0.5rem 0 1rem;
+}
+
+.timeline-viz-axis {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  margin-top: -1px;
+  height: 2px;
+  display: flex;
+  align-items: center;
+}
+
+.axis-line {
+  flex: 1;
+  height: 2px;
+  background: var(--border);
+  margin: 0 0.25rem;
+}
+
+.axis-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.timeline-viz-lane {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 42%;
+  pointer-events: none;
+  opacity: 0.35;
+  border-radius: 4px;
+}
+
+.lane-scene {
+  top: 4%;
+  background: rgba(60, 120, 200, 0.12);
+}
+
+.lane-event {
+  bottom: 4%;
+  background: rgba(160, 80, 160, 0.12);
+}
+
+.lane-label {
+  position: absolute;
+  left: 6px;
+  top: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.timeline-viz-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.marker-dot {
+  position: absolute;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 2;
+  pointer-events: auto;
+}
+
+.is-scene .marker-dot {
+  background: #3a7bd5;
+}
+
+.is-event .marker-dot {
+  background: #a855c8;
+}
+
+.marker-card {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 6rem;
+  max-width: 11rem;
+  padding: 0.35rem 0.45rem;
+  font-size: 0.78rem;
+  line-height: 1.25;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  pointer-events: auto;
+  text-align: center;
+}
+
+.marker-type {
+  display: block;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  margin-bottom: 0.15rem;
+}
+
+.marker-title {
+  display: block;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.marker-note {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  max-height: 3.6em;
+  overflow: hidden;
+}
+
+.timeline-viz-legend {
+  display: flex;
+  gap: 1.25rem;
+  margin-top: 0.65rem;
+  font-size: 0.88rem;
+}
+
+.leg {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.leg .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.leg-scene .dot {
+  background: #3a7bd5;
+}
+
+.leg-event .dot {
+  background: #a855c8;
+}

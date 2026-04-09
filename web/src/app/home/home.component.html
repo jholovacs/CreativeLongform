@@ -1,0 +1,32 @@
+<section class="home">
+  <h1>Your stories</h1>
+  <p class="lede">Open a story for world-building, or go to Scenes to run generation.</p>
+
+  @if (error) {
+    <p class="error">{{ error }}</p>
+  }
+
+  <div class="actions">
+    <a routerLink="/new-story" class="cta">New story</a>
+    <button type="button" (click)="load()" [disabled]="loading">Reload</button>
+  </div>
+
+  @if (loading) {
+    <p>Loading…</p>
+  } @else if (books.length === 0) {
+    <p>No stories yet. <a routerLink="/new-story">Create one</a>.</p>
+  } @else {
+    <ul class="book-list">
+      @for (b of books; track b.id) {
+        <li>
+          <a [routerLink]="['/book', b.id]" class="title">{{ b.title }}</a>
+          <span class="meta">
+            <a [routerLink]="['/book', b.id]">World</a>
+            ·
+            <a routerLink="/scenes">Scenes</a>
+          </span>
+        </li>
+      }
+    </ul>
+  }
+</section>

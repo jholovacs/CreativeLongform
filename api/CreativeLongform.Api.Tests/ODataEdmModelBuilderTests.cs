@@ -12,5 +12,6 @@ public sealed class ODataEdmModelBuilderTests
         Assert.NotNull(model);
         Assert.NotNull(model.EntityContainer.FindEntitySet("Books"));
         Assert.NotNull(model.EntityContainer.FindEntitySet("SceneWorldElements"));
+        Assert.NotNull(model.EntityContainer.FindEntitySet("TimelineEntries"));
     }
 }

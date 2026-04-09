@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using CreativeLongform.Application.Abstractions;
 using CreativeLongform.Application.Generation;
 using CreativeLongform.Domain.Enums;
@@ -40,6 +42,7 @@ public static class AgenticEditLoop
         Func<string, string, CancellationToken, Task<(string messageText, string raw)>> chatJsonAsync,
         IGenerationProgressNotifier notifier,
         Guid runId,
+        Func<long> pipelineElapsedMs,
         CancellationToken cancellationToken)
     {
         var paragraphs = SplitParagraphs(initialDraft);
@@ -60,7 +63,9 @@ public static class AgenticEditLoop
                 numbered,
                 lastToolResult);
 
+            var turnSw = Stopwatch.StartNew();
             var (raw, _) = await chatJsonAsync(SystemPrompt, user, cancellationToken);
+            turnSw.Stop();
             var cleaned = LlmJson.StripMarkdownFences(raw).Trim();
             AgentEditActionDto? action;
             try
@@ -72,7 +77,12 @@ public static class AgenticEditLoop
                 logger.LogWarning(ex, "Agentic edit turn {Turn}: invalid JSON", turn);
                 lastToolResult = $"Error: output was not valid JSON. Fix and try again. Raw (truncated): {Truncate(cleaned, 400)}";
                 await notifier.NotifyAsync(runId, "AgentEditTurn", nameof(PipelineStep.AgentEdit),
-                    $"turn:{turn}:invalid_json", cancellationToken);
+                    $"Turn {turn}/{maxTurns}: model returned invalid JSON; the editor will retry. ({turnSw.ElapsedMilliseconds} ms for LLM)",
+                    cancellationToken,
+                    pipelineElapsedMs(),
+                    turnSw.ElapsedMilliseconds,
+                    Truncate(cleaned, 400),
+                    SerializeAgentLlmPrompt(SystemPrompt, user));
                 continue;
             }
 
@@ -80,13 +90,22 @@ public static class AgenticEditLoop
             {
                 lastToolResult = "Error: missing \"action\" in JSON.";
                 await notifier.NotifyAsync(runId, "AgentEditTurn", nameof(PipelineStep.AgentEdit),
-                    $"turn:{turn}:missing_action", cancellationToken);
+                    $"Turn {turn}/{maxTurns}: JSON missing \"action\" field. ({turnSw.ElapsedMilliseconds} ms)",
+                    cancellationToken,
+                    pipelineElapsedMs(),
+                    turnSw.ElapsedMilliseconds,
+                    Truncate(cleaned, 400),
+                    SerializeAgentLlmPrompt(SystemPrompt, user));
                 continue;
             }
 
             var kind = action.Action.Trim().ToLowerInvariant();
-            await notifier.NotifyAsync(runId, "AgentEditTurn", nameof(PipelineStep.AgentEdit),
-                $"turn:{turn}:{kind}", cancellationToken);
+            var detail = kind == "finish"
+                ? $"Turn {turn}/{maxTurns}: editor finished — {Truncate(action.Reason ?? "(no reason)", 200)} (LLM {turnSw.ElapsedMilliseconds} ms)"
+                : $"Turn {turn}/{maxTurns}: tool action «{kind}» (LLM {turnSw.ElapsedMilliseconds} ms)";
+            await notifier.NotifyAsync(runId, "AgentEditTurn", nameof(PipelineStep.AgentEdit), detail, cancellationToken,
+                pipelineElapsedMs(), turnSw.ElapsedMilliseconds, Truncate(cleaned, 400),
+                SerializeAgentLlmPrompt(SystemPrompt, user));
 
             switch (kind)
             {
@@ -284,6 +303,9 @@ public static class AgenticEditLoop
             return s;
         return s[..max] + "…";
     }
+
+    private static string SerializeAgentLlmPrompt(string system, string user) =>
+        JsonSerializer.Serialize(new { system, user }, new JsonSerializerOptions { WriteIndented = true });
 }
 
 internal sealed class AgentEditActionDto

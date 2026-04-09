@@ -1,0 +1,68 @@
+.new-story {
+  max-width: 40rem;
+
+  .back {
+    margin: 0 0 0.5rem;
+  }
+
+  h1 {
+    margin-top: 0;
+  }
+
+  .lede {
+    color: var(--muted);
+  }
+
+  .form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  label {
+    margin-top: 0.5rem;
+    font-weight: 500;
+  }
+
+  .req {
+    color: var(--danger);
+  }
+
+  textarea {
+    width: 100%;
+    min-height: 2.5rem;
+    resize: vertical;
+  }
+
+  input[type='text'],
+  input[type='file'] {
+    max-width: 100%;
+  }
+
+  .file-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .fname {
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+
+  .check {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    font-weight: normal;
+  }
+
+  .submit-row {
+    margin-top: 1rem;
+  }
+
+  .error {
+    color: var(--danger);
+  }
+}

@@ -9,5 +9,7 @@ public enum WorldElementKind
     SignificantEvent = 4,
     SocialSystem = 5,
     NovelSystem = 6,
-    Other = 7
+    Other = 7,
+    /// <summary>Characters and important people.</summary>
+    Character = 8
 }

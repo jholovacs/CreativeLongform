@@ -34,7 +34,7 @@ builder.Services.AddControllers()
     })
     .AddOData(options =>
     {
-        options.Filter().OrderBy().Expand().Select().SetMaxTop(100).Count();
+        options.Filter().OrderBy().Expand().Select().SetMaxTop(1000).Count();
         options.AddRouteComponents("odata", ODataEdmModelBuilder.Build());
     });
 

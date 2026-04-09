@@ -1,0 +1,76 @@
+@if (open) {
+  <div class="timeline-viz-backdrop" (click)="onBackdropClick($event)" aria-hidden="true"></div>
+  <div
+    class="timeline-viz-dialog"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="timeline-viz-title"
+    (click)="$event.stopPropagation()"
+  >
+    <header class="timeline-viz-header">
+      <h2 id="timeline-viz-title">Story-Time Timeline</h2>
+      <div class="timeline-viz-toolbar">
+        <button type="button" class="toolbar-btn" (click)="zoomOut()" title="Zoom out">−</button>
+        <button type="button" class="toolbar-btn" (click)="zoomIn()" title="Zoom in">+</button>
+        <button type="button" class="toolbar-btn" (click)="resetView()" title="Reset zoom and pan">Reset</button>
+        <button type="button" class="toolbar-close" (click)="close()" aria-label="Close">×</button>
+      </div>
+    </header>
+    <p class="hint">
+      Horizontal position follows <strong>sort key</strong> (earlier story-time left, later right). Use the mouse wheel to zoom,
+      drag to pan, or use +/−. Press Escape to close.
+    </p>
+    @if (entries.length === 0) {
+      <p class="empty">No timeline entries to show yet.</p>
+    } @else {
+      <div
+        #viewport
+        class="timeline-viz-viewport"
+        (wheel)="onWheel($event)"
+        (pointerdown)="onPointerDown($event)"
+        (pointermove)="onPointerMove($event)"
+        (pointerup)="onPointerUp($event)"
+        (pointercancel)="onPointerUp($event)"
+      >
+        <div
+          class="timeline-viz-world"
+          [style.width.px]="contentWidthPx"
+          [style.transform]="trackTransform()"
+        >
+          <div class="timeline-viz-axis">
+            <span class="axis-label axis-start">{{ minKey | number: '1.0-2' }}</span>
+            <div class="axis-line"></div>
+            <span class="axis-label axis-end">{{ maxKey | number: '1.0-2' }}</span>
+          </div>
+          <div class="timeline-viz-lane lane-scene">
+            <span class="lane-label">Scenes</span>
+          </div>
+          <div class="timeline-viz-lane lane-event">
+            <span class="lane-label">Events</span>
+          </div>
+          @for (m of markers; track m.entry.id) {
+            <div
+              class="timeline-viz-marker"
+              [class.is-scene]="m.kind === 0"
+              [class.is-event]="m.kind === 1"
+              [style.left.%]="m.xPercent"
+            >
+              <div class="marker-dot" [title]="m.title" [style.top]="dotTop(m)"></div>
+              <div class="marker-card" [style.top]="cardTop(m)">
+                <span class="marker-type">{{ m.kind === 0 ? 'Scene' : 'World Event' }}</span>
+                <span class="marker-title">{{ m.title }}</span>
+                @if (m.entry.summary?.trim()) {
+                  <span class="marker-note">{{ m.entry.summary }}</span>
+                }
+              </div>
+            </div>
+          }
+        </div>
+      </div>
+      <div class="timeline-viz-legend">
+        <span class="leg leg-scene"><span class="dot"></span> Scene</span>
+        <span class="leg leg-event"><span class="dot"></span> World Event</span>
+      </div>
+    }
+  </div>
+}

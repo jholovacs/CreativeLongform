@@ -40,3 +40,10 @@ public sealed class WorldBuildingLinkDto
     [JsonPropertyName("relationLabel")]
     public string RelationLabel { get; set; } = string.Empty;
 }
+
+/// <summary>LLM output for single-element link suggestions.</summary>
+public sealed class WorldBuildingLinkSuggestResult
+{
+    [JsonPropertyName("suggestedLinks")]
+    public List<WorldBuildingLinkDto> SuggestedLinks { get; set; } = new();
+}

@@ -15,6 +15,7 @@ public interface ICreativeLongformDbContext
     DbSet<WorldElement> WorldElements { get; }
     DbSet<WorldElementLink> WorldElementLinks { get; }
     DbSet<SceneWorldElement> SceneWorldElements { get; }
+    DbSet<TimelineEntry> TimelineEntries { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

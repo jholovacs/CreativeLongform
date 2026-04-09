@@ -1,6 +1,10 @@
 <section class="book-world">
-  <nav><a routerLink="/">← Scenes</a></nav>
-  <h1>Story & world</h1>
+  <nav class="crumb">
+    <a routerLink="/" class="crumb-link"><app-ui-icon name="arrow-left" /><span>Stories</span></a>
+    <span class="crumb-sep" aria-hidden="true">·</span>
+    <a routerLink="/scenes">Scenes</a>
+  </nav>
+  <h1>Story &amp; World</h1>
   @if (book) {
     <p class="meta">Book: {{ book.title }}</p>
   }
@@ -9,32 +13,480 @@
     <p class="error">{{ error }}</p>
   }
 
-  <section class="panel measurement">
-    <h2>Units &amp; calendar</h2>
+  <details
+    class="panel collapsible"
+    [open]="panelOpen.storyProfile"
+    (toggle)="onPanelToggle('storyProfile', $event)"
+  >
+    <summary>
+      <span class="sum-title">Story Profile</span>
+      <span class="sum-preview">{{ storyProfileSummary }}</span>
+      <span class="panel-sum-actions">
+        <button
+          type="button"
+          class="btn-icon"
+          title="Expand section"
+          (click)="expandPanel('storyProfile', $event)"
+          [disabled]="panelOpen.storyProfile"
+        >
+          <app-ui-icon name="chevron-down" />
+          <span class="sr-only">Expand section</span>
+        </button>
+        <button
+          type="button"
+          class="btn-icon"
+          title="Collapse section"
+          (click)="collapsePanel('storyProfile', $event)"
+          [disabled]="!panelOpen.storyProfile"
+        >
+          <app-ui-icon name="chevron-up" />
+          <span class="sr-only">Collapse section</span>
+        </button>
+      </span>
+    </summary>
+    <div class="collapsible-inner">
+    <label for="tone">Tone and Style</label>
+    <textarea id="tone" rows="3" [(ngModel)]="tone" [disabled]="busy" [title]="fieldHelp.tone"></textarea>
+    <label for="notes">Content Style Notes</label>
+    <textarea id="notes" rows="2" [(ngModel)]="contentNotes" [disabled]="busy" [title]="fieldHelp.contentNotes"></textarea>
+    <label for="synopsis">Synopsis</label>
+    <textarea
+      id="synopsis"
+      rows="4"
+      [(ngModel)]="synopsis"
+      [disabled]="busy"
+      placeholder="What happens in this story?"
+      [title]="fieldHelp.synopsis"
+    ></textarea>
+    <button type="button" class="primary btn-with-icon" (click)="saveStoryProfile()" [disabled]="busy">
+      <app-ui-icon name="save" />
+      Save Story Profile
+    </button>
+    </div>
+  </details>
+
+  <details
+    class="panel collapsible timeline"
+    [open]="panelOpen.timeline"
+    (toggle)="onPanelToggle('timeline', $event)"
+  >
+    <summary>
+      <span class="sum-title">Story Timeline</span>
+      <span class="sum-preview">{{ timelineSummary }}</span>
+      <span class="panel-sum-actions">
+        <button
+          type="button"
+          class="btn-icon"
+          title="Expand section"
+          (click)="expandPanel('timeline', $event)"
+          [disabled]="panelOpen.timeline"
+        >
+          <app-ui-icon name="chevron-down" />
+          <span class="sr-only">Expand section</span>
+        </button>
+        <button
+          type="button"
+          class="btn-icon"
+          title="Collapse section"
+          (click)="collapsePanel('timeline', $event)"
+          [disabled]="!panelOpen.timeline"
+        >
+          <app-ui-icon name="chevron-up" />
+          <span class="sr-only">Collapse section</span>
+        </button>
+      </span>
+    </summary>
+    <div class="collapsible-inner">
+    <p class="hint">
+      Story-time order: manuscript scenes plus optional beats (world lore, off-page turning points). Change the sort value to
+      place events between scenes or adjust chronology (for example flashbacks). Scenes are removed from the timeline if the
+      scene is deleted.
+    </p>
+    <p class="timeline-viz-row">
+      <button type="button" class="btn-with-icon" (click)="openTimelineViz()" [disabled]="busy || timelineVizLoading">
+        @if (timelineVizLoading) {
+          Loading…
+        } @else {
+          <app-ui-icon name="chart" />
+          Visual Timeline
+        }
+      </button>
+      <span class="hint inline-hint">Open a zoomable map of scenes and events by sort key.</span>
+    </p>
+    <label for="timeline-search">Search Timeline</label>
+    <input
+      id="timeline-search"
+      type="search"
+      [(ngModel)]="timelineSearchQuery"
+      (ngModelChange)="onTimelineSearchInput($event)"
+      placeholder="Title or notes…"
+      [disabled]="busy"
+      [title]="fieldHelp.timelineSearch"
+    />
+    <div class="pager" role="navigation" aria-label="Timeline pages">
+      <button
+        type="button"
+        class="btn-icon"
+        title="First page"
+        (click)="timelineFirstPage()"
+        [disabled]="busy || timelineTotalCount === 0 || timelineOnFirstPage()"
+      >
+        <app-ui-icon name="chevrons-left" />
+        <span class="sr-only">First page</span>
+      </button>
+      <button
+        type="button"
+        class="btn-icon"
+        title="Previous page"
+        (click)="timelinePrevPage()"
+        [disabled]="busy || timelineTotalCount === 0 || timelineOnFirstPage()"
+      >
+        <app-ui-icon name="chevron-left" />
+        <span class="sr-only">Previous page</span>
+      </button>
+      <span class="pager-info">{{ timelineRangeLabel() }}</span>
+      <button
+        type="button"
+        class="btn-icon"
+        title="Next page"
+        (click)="timelineNextPage()"
+        [disabled]="busy || timelineTotalCount === 0 || !timelineHasNext()"
+      >
+        <app-ui-icon name="chevron-right" />
+        <span class="sr-only">Next page</span>
+      </button>
+      <button
+        type="button"
+        class="btn-icon"
+        title="Last page"
+        (click)="timelineLastPage()"
+        [disabled]="busy || timelineTotalCount === 0 || timelineOnLastPage()"
+      >
+        <app-ui-icon name="chevrons-right" />
+        <span class="sr-only">Last page</span>
+      </button>
+      <label class="pager-size">
+        Per page
+        <select
+          [(ngModel)]="timelinePageSize"
+          (ngModelChange)="onTimelinePageSizeChange()"
+          [disabled]="busy"
+          [title]="fieldHelp.timelinePageSize"
+        >
+          <option [ngValue]="10">10</option>
+          <option [ngValue]="20">20</option>
+          <option [ngValue]="50">50</option>
+        </select>
+      </label>
+    </div>
+    <table class="elements-table timeline-main">
+      <thead>
+        <tr>
+          <th>Order</th>
+          <th>Type</th>
+          <th>Title</th>
+          <th>Notes</th>
+          <th>World Link</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (te of timelineEntries; track te.id) {
+          <tr>
+            <td class="timeline-sort">
+              <input
+                type="text"
+                [(ngModel)]="timelineSortDraft[te.id]"
+                [name]="'tsd' + te.id"
+                [disabled]="busy"
+                [title]="fieldHelp.timelineSortKey"
+              />
+              <button type="button" class="btn-icon" title="Apply sort" (click)="saveTimelineSort(te)" [disabled]="busy">
+                <app-ui-icon name="check" />
+                <span class="sr-only">Apply sort</span>
+              </button>
+            </td>
+            <td>{{ timelineKindLabel(te.kind) }}</td>
+            <td>{{ timelineDisplayTitle(te) }}</td>
+            <td class="summary-cell">{{ te.summary?.trim() ? te.summary : '—' }}</td>
+            <td>{{ te.worldElement?.title ?? '—' }}</td>
+            <td class="actions">
+              @if (te.kind === 1) {
+                <button type="button" class="danger btn-icon" title="Remove from timeline" (click)="deleteTimelineEntry(te)" [disabled]="busy">
+                  <app-ui-icon name="trash" />
+                  <span class="sr-only">Remove from timeline</span>
+                </button>
+              }
+            </td>
+          </tr>
+          @if (timelineFxDraft[te.id]; as fx) {
+            <tr class="timeline-fx-row">
+              <td colspan="6">
+                <div class="timeline-fx-grid">
+                  <span class="fx-heading">Currency Pair (Story-Time)</span>
+                  <label class="fx-field">Base
+                    <input
+                      type="text"
+                      [(ngModel)]="fx.base"
+                      [name]="'fxb' + te.id"
+                      [disabled]="busy"
+                      placeholder="e.g. Crown"
+                      [title]="fieldHelp.timelineFxBase"
+                    />
+                  </label>
+                  <label class="fx-field">Quote
+                    <input
+                      type="text"
+                      [(ngModel)]="fx.quote"
+                      [name]="'fxq' + te.id"
+                      [disabled]="busy"
+                      placeholder="e.g. Guild mark"
+                      [title]="fieldHelp.timelineFxQuote"
+                    />
+                  </label>
+                  <label class="fx-field">Authority
+                    <input
+                      type="text"
+                      [(ngModel)]="fx.authority"
+                      [name]="'fxa' + te.id"
+                      [disabled]="busy"
+                      placeholder="Issuer / regime"
+                      [title]="fieldHelp.timelineFxAuthority"
+                    />
+                  </label>
+                  <label class="fx-field wide">Exchange note
+                    <input
+                      type="text"
+                      [(ngModel)]="fx.note"
+                      [name]="'fxn' + te.id"
+                      [disabled]="busy"
+                      placeholder="Rate or narrative at this beat"
+                      [title]="fieldHelp.timelineFxNote"
+                    />
+                  </label>
+                  <button type="button" class="btn-with-icon" (click)="saveTimelineFx(te)" [disabled]="busy">
+                    <app-ui-icon name="save" />
+                    Save pair
+                  </button>
+                </div>
+              </td>
+            </tr>
+          }
+        }
+      </tbody>
+    </table>
+    @if (timelineTotalCount === 0) {
+      <p>
+        {{
+          timelineSearchQuery.trim()
+            ? 'No timeline beats match your search.'
+            : 'No timeline rows yet. Scenes appear here automatically; add a world event below.'
+        }}
+      </p>
+    }
+    @if (timelineEntries.length === 0 && timelineTotalCount > 0) {
+      <p>No beats on this page.</p>
+    }
+
+    <h3 class="sub">Add World Event</h3>
+    <label for="ntimelinetitle">Title</label>
+    <input id="ntimelinetitle" type="text" [(ngModel)]="newTimelineTitle" [disabled]="busy" [title]="fieldHelp.newTimelineTitle" />
+    <label for="ntimelinesum">Notes (Optional)</label>
+    <textarea
+      id="ntimelinesum"
+      rows="2"
+      [(ngModel)]="newTimelineSummary"
+      [disabled]="busy"
+      [title]="fieldHelp.newTimelineSummary"
+    ></textarea>
+    <label for="ntimelinesk">Sort Key (Optional; Default = After Last Entry)</label>
+    <input
+      id="ntimelinesk"
+      type="text"
+      [(ngModel)]="newTimelineSortKey"
+      [disabled]="busy"
+      placeholder="e.g. 1500000"
+      [title]="fieldHelp.newTimelineSortKey"
+    />
+    <label for="ntimelineel">Link World Element (Optional)</label>
+    <select id="ntimelineel" [(ngModel)]="newTimelineWorldElementId" [disabled]="busy" [title]="fieldHelp.newTimelineWorldElement">
+      <option [ngValue]="''">— none —</option>
+      @for (el of pickerElements; track el.id) {
+        <option [ngValue]="el.id">{{ el.kind }}: {{ el.title }}</option>
+      }
+    </select>
+    <h4 class="fx-sub">Currency Pair (Optional)</h4>
+    <div class="row timeline-new-fx">
+      <label>
+        Base
+        <input
+          type="text"
+          [(ngModel)]="newTimelineCurrencyBase"
+          [disabled]="busy"
+          [title]="fieldHelp.newTimelineCurrencyBase"
+        />
+      </label>
+      <label>
+        Quote
+        <input
+          type="text"
+          [(ngModel)]="newTimelineCurrencyQuote"
+          [disabled]="busy"
+          [title]="fieldHelp.newTimelineCurrencyQuote"
+        />
+      </label>
+      <label>
+        Authority
+        <input
+          type="text"
+          [(ngModel)]="newTimelineCurrencyAuthority"
+          [disabled]="busy"
+          [title]="fieldHelp.newTimelineCurrencyAuthority"
+        />
+      </label>
+    </div>
+    <label for="ntimelinefxn">Exchange note</label>
+    <input
+      id="ntimelinefxn"
+      type="text"
+      [(ngModel)]="newTimelineCurrencyExchangeNote"
+      [disabled]="busy"
+      [title]="fieldHelp.newTimelineExchangeNote"
+    />
+    <button type="button" class="btn-with-icon" (click)="createWorldTimelineEvent()" [disabled]="busy">
+      <app-ui-icon name="plus" />
+      Add World Event
+    </button>
+    </div>
+  </details>
+
+  <details
+    class="panel collapsible measurement"
+    [open]="panelOpen.measurement"
+    (toggle)="onPanelToggle('measurement', $event)"
+  >
+    <summary>
+      <span class="sum-title">Units &amp; Calendar</span>
+      <span class="sum-preview">{{ measurementSummary }}</span>
+      <span class="panel-sum-actions">
+        <button
+          type="button"
+          class="btn-icon"
+          title="Expand section"
+          (click)="expandPanel('measurement', $event)"
+          [disabled]="panelOpen.measurement"
+        >
+          <app-ui-icon name="chevron-down" />
+          <span class="sr-only">Expand section</span>
+        </button>
+        <button
+          type="button"
+          class="btn-icon"
+          title="Collapse section"
+          (click)="collapsePanel('measurement', $event)"
+          [disabled]="!panelOpen.measurement"
+        >
+          <app-ui-icon name="chevron-up" />
+          <span class="sr-only">Collapse section</span>
+        </button>
+      </span>
+    </summary>
+    <div class="collapsible-inner">
     <p class="hint">
       Presets add Earth-like defaults to generation prompts. Custom rows override or extend (especially with
       &quot;Custom&quot; preset).
     </p>
-    <label for="preset">Measurement preset</label>
-    <select id="preset" [(ngModel)]="measurementPreset" [disabled]="busy">
+    <label for="preset">Measurement Preset</label>
+    <select id="preset" [(ngModel)]="measurementPreset" [disabled]="busy" [title]="fieldHelp.measurementPreset">
       <option [ngValue]="0">Earth — metric / SI</option>
       <option [ngValue]="1">Earth — US customary</option>
       <option [ngValue]="2">Custom</option>
     </select>
 
-    <h3 class="sub">Calendar overrides</h3>
-    <div class="row">
-      <label for="dpy">Days per year</label>
-      <input id="dpy" type="number" [(ngModel)]="calDaysPerYear" [disabled]="busy" />
-      <label for="dpw">Days per week</label>
-      <input id="dpw" type="number" [(ngModel)]="calDaysPerWeek" [disabled]="busy" />
+    <h3 class="sub">Calendar Overrides</h3>
+    <div class="calendar-fields">
+      <div class="field-numeric">
+        <label for="dpy">Days per year</label>
+        <input
+          id="dpy"
+          class="input-numeric"
+          type="number"
+          [(ngModel)]="calDaysPerYear"
+          [disabled]="busy"
+          [title]="fieldHelp.calDaysPerYear"
+        />
+      </div>
+      <div class="field-numeric">
+        <label for="dpw">Days per week</label>
+        <input
+          id="dpw"
+          class="input-numeric"
+          type="number"
+          [(ngModel)]="calDaysPerWeek"
+          [disabled]="busy"
+          [title]="fieldHelp.calDaysPerWeek"
+        />
+      </div>
     </div>
     <label for="months">Month names (comma-separated)</label>
-    <input id="months" type="text" [(ngModel)]="monthNamesCsv" [disabled]="busy" />
+    <input id="months" type="text" [(ngModel)]="monthNamesCsv" [disabled]="busy" [title]="fieldHelp.monthNamesCsv" />
     <label for="weekdays">Weekday names (comma-separated)</label>
-    <input id="weekdays" type="text" [(ngModel)]="weekdayNamesCsv" [disabled]="busy" />
+    <input id="weekdays" type="text" [(ngModel)]="weekdayNamesCsv" [disabled]="busy" [title]="fieldHelp.weekdayNamesCsv" />
 
-    <h3 class="sub">Custom units</h3>
+    <h3 class="sub">Custom Units</h3>
+    <label for="units-search">Search Units</label>
+    <input
+      id="units-search"
+      type="search"
+      [(ngModel)]="unitsSearchQuery"
+      (ngModelChange)="onUnitsSearchInput($event)"
+      placeholder="Category, name, definition…"
+      [disabled]="busy"
+      [title]="fieldHelp.unitsSearch"
+    />
+    <div class="pager" role="navigation" aria-label="Custom units pages">
+      <button
+        type="button"
+        class="btn-icon"
+        title="First page"
+        (click)="unitsFirstPage()"
+        [disabled]="busy || unitsFilteredCount() === 0 || unitsOnFirstPage()"
+      >
+        <app-ui-icon name="chevrons-left" />
+        <span class="sr-only">First page</span>
+      </button>
+      <button
+        type="button"
+        class="btn-icon"
+        title="Previous page"
+        (click)="unitsPrevPage()"
+        [disabled]="busy || unitsFilteredCount() === 0 || unitsOnFirstPage()"
+      >
+        <app-ui-icon name="chevron-left" />
+        <span class="sr-only">Previous page</span>
+      </button>
+      <span class="pager-info">{{ unitsRangeLabel() }} · 10 per page</span>
+      <button
+        type="button"
+        class="btn-icon"
+        title="Next page"
+        (click)="unitsNextPage()"
+        [disabled]="busy || unitsFilteredCount() === 0 || !unitsHasNext()"
+      >
+        <app-ui-icon name="chevron-right" />
+        <span class="sr-only">Next page</span>
+      </button>
+      <button
+        type="button"
+        class="btn-icon"
+        title="Last page"
+        (click)="unitsLastPage()"
+        [disabled]="busy || unitsFilteredCount() === 0 || unitsOnLastPage()"
+      >
+        <app-ui-icon name="chevrons-right" />
+        <span class="sr-only">Last page</span>
+      </button>
+    </div>
     <table class="units-table">
       <thead>
         <tr>
@@ -42,96 +494,874 @@
           <th>Name</th>
           <th>Symbol</th>
           <th>Definition</th>
-          <th>SI anchor (optional)</th>
+          <th>SI Anchor (Optional)</th>
           <th></th>
         </tr>
       </thead>
       <tbody>
-        @for (u of measurementPayload.units ?? []; track $index) {
+        @for (row of unitsPageView(); track row.idx) {
           <tr>
-            <td><input [(ngModel)]="u.category" [name]="'uc' + $index" [disabled]="busy" /></td>
-            <td><input [(ngModel)]="u.name" [name]="'un' + $index" [disabled]="busy" /></td>
-            <td><input [(ngModel)]="u.symbol" [name]="'us' + $index" [disabled]="busy" /></td>
-            <td><input class="wide" [(ngModel)]="u.definition" [name]="'ud' + $index" [disabled]="busy" /></td>
-            <td><input [(ngModel)]="u.approximateSiNote" [name]="'ua' + $index" [disabled]="busy" /></td>
-            <td><button type="button" (click)="removeUnitRow($index)" [disabled]="busy">Remove</button></td>
+            <td><input [(ngModel)]="row.u.category" [name]="'uc' + row.idx" [disabled]="busy" [title]="fieldHelp.unitCategory" /></td>
+            <td><input [(ngModel)]="row.u.name" [name]="'un' + row.idx" [disabled]="busy" [title]="fieldHelp.unitName" /></td>
+            <td><input [(ngModel)]="row.u.symbol" [name]="'us' + row.idx" [disabled]="busy" [title]="fieldHelp.unitSymbol" /></td>
+            <td>
+              <input
+                class="wide"
+                [(ngModel)]="row.u.definition"
+                [name]="'ud' + row.idx"
+                [disabled]="busy"
+                [title]="fieldHelp.unitDefinition"
+              />
+            </td>
+            <td>
+              <input [(ngModel)]="row.u.approximateSiNote" [name]="'ua' + row.idx" [disabled]="busy" [title]="fieldHelp.unitSiAnchor" />
+            </td>
+            <td>
+              <button type="button" class="danger btn-icon" title="Remove unit" (click)="removeUnitAtIndex(row.idx)" [disabled]="busy">
+                <app-ui-icon name="trash" />
+                <span class="sr-only">Remove unit</span>
+              </button>
+            </td>
           </tr>
         }
       </tbody>
     </table>
-    <button type="button" (click)="addUnitRow()" [disabled]="busy">Add unit</button>
+    @if (unitsFilteredCount() === 0) {
+      <p>{{ unitsSearchQuery.trim() ? 'No units match your search.' : 'No custom units yet.' }}</p>
+    }
+    <button type="button" class="btn-with-icon" (click)="addUnitRow()" [disabled]="busy">
+      <app-ui-icon name="plus" />
+      Add Unit
+    </button>
 
-    <h3 class="sub">Money / currency</h3>
+    <h3 class="sub">Money / Currency</h3>
+    <label for="money-search">Search Currencies</label>
+    <input
+      id="money-search"
+      type="search"
+      [(ngModel)]="moneySearchQuery"
+      (ngModelChange)="onMoneySearchInput($event)"
+      placeholder="Name, authority, definition…"
+      [disabled]="busy"
+      [title]="fieldHelp.moneySearch"
+    />
+    <div class="pager" role="navigation" aria-label="Money pages">
+      <button
+        type="button"
+        class="btn-icon"
+        title="First page"
+        (click)="moneyFirstPage()"
+        [disabled]="busy || moneyFilteredCount() === 0 || moneyOnFirstPage()"
+      >
+        <app-ui-icon name="chevrons-left" />
+        <span class="sr-only">First page</span>
+      </button>
+      <button
+        type="button"
+        class="btn-icon"
+        title="Previous page"
+        (click)="moneyPrevPage()"
+        [disabled]="busy || moneyFilteredCount() === 0 || moneyOnFirstPage()"
+      >
+        <app-ui-icon name="chevron-left" />
+        <span class="sr-only">Previous page</span>
+      </button>
+      <span class="pager-info">{{ moneyRangeLabel() }} · 10 per page</span>
+      <button
+        type="button"
+        class="btn-icon"
+        title="Next page"
+        (click)="moneyNextPage()"
+        [disabled]="busy || moneyFilteredCount() === 0 || !moneyHasNext()"
+      >
+        <app-ui-icon name="chevron-right" />
+        <span class="sr-only">Next page</span>
+      </button>
+      <button
+        type="button"
+        class="btn-icon"
+        title="Last page"
+        (click)="moneyLastPage()"
+        [disabled]="busy || moneyFilteredCount() === 0 || moneyOnLastPage()"
+      >
+        <app-ui-icon name="chevrons-right" />
+        <span class="sr-only">Last page</span>
+      </button>
+    </div>
     <table class="units-table">
       <thead>
         <tr>
           <th>Name</th>
+          <th>Authority</th>
           <th>Definition</th>
           <th></th>
         </tr>
       </thead>
       <tbody>
-        @for (m of measurementPayload.money ?? []; track $index) {
+        @for (row of moneyPageView(); track row.idx) {
           <tr>
-            <td><input [(ngModel)]="m.name" [name]="'mn' + $index" [disabled]="busy" /></td>
-            <td><input class="wide" [(ngModel)]="m.definition" [name]="'md' + $index" [disabled]="busy" /></td>
-            <td><button type="button" (click)="removeMoneyRow($index)" [disabled]="busy">Remove</button></td>
+            <td><input [(ngModel)]="row.m.name" [name]="'mn' + row.idx" [disabled]="busy" [title]="fieldHelp.moneyName" /></td>
+            <td>
+              <input
+                [(ngModel)]="row.m.authority"
+                [name]="'mauth' + row.idx"
+                [disabled]="busy"
+                placeholder="Nation / org"
+                [title]="fieldHelp.moneyAuthority"
+              />
+            </td>
+            <td>
+              <input
+                class="wide"
+                [(ngModel)]="row.m.definition"
+                [name]="'md' + row.idx"
+                [disabled]="busy"
+                [title]="fieldHelp.moneyDefinition"
+              />
+            </td>
+            <td>
+              <button type="button" class="danger btn-icon" title="Remove currency" (click)="removeMoneyAtIndex(row.idx)" [disabled]="busy">
+                <app-ui-icon name="trash" />
+                <span class="sr-only">Remove currency</span>
+              </button>
+            </td>
           </tr>
         }
       </tbody>
     </table>
-    <button type="button" (click)="addMoneyRow()" [disabled]="busy">Add money entry</button>
-
-    <label for="mnotes">Notes (optional)</label>
-    <textarea id="mnotes" rows="2" [(ngModel)]="measurementPayload.notes" [disabled]="busy"></textarea>
-
-    <button type="button" (click)="saveMeasurement()" [disabled]="busy">Save units &amp; calendar</button>
-  </section>
-
-  <section class="panel">
-    <h2>Story tone & style</h2>
-    <label for="tone">Tone and style (used in all generation prompts)</label>
-    <textarea id="tone" rows="3" [(ngModel)]="tone" [disabled]="busy"></textarea>
-    <label for="notes">Content style notes (optional)</label>
-    <textarea id="notes" rows="2" [(ngModel)]="contentNotes" [disabled]="busy"></textarea>
-    <button type="button" (click)="saveTone()" [disabled]="busy">Save</button>
-  </section>
-
-  <section class="panel">
-    <h2>LLM world-building</h2>
-    <label for="extract">Paste text to extract canon from</label>
-    <textarea id="extract" rows="5" [(ngModel)]="extractText" [disabled]="busy"></textarea>
-    <button type="button" (click)="runExtract()" [disabled]="busy">Extract entries</button>
-
-    <label for="gen">Prompt to generate new entries</label>
-    <textarea id="gen" rows="3" [(ngModel)]="generatePrompt" [disabled]="busy"></textarea>
-    <button type="button" (click)="runGenerate()" [disabled]="busy">Generate entries</button>
-  </section>
-
-  <section class="panel">
-    <h2>World elements</h2>
-    @if (elements.length === 0) {
-      <p>No entries yet. Extract or generate above, or add via API/OData.</p>
+    @if (moneyFilteredCount() === 0) {
+      <p>{{ moneySearchQuery.trim() ? 'No currencies match your search.' : 'No currency entries yet.' }}</p>
     }
-    <table>
+    <button type="button" class="btn-with-icon" (click)="addMoneyRow()" [disabled]="busy">
+      <app-ui-icon name="plus" />
+      Add Money Entry
+    </button>
+
+    <label for="mnotes">Notes (Optional)</label>
+    <textarea id="mnotes" rows="2" [(ngModel)]="measurementPayload.notes" [disabled]="busy" [title]="fieldHelp.measurementNotes"></textarea>
+
+    <div class="save-measurement-row">
+      <button type="button" class="primary btn-with-icon" (click)="saveMeasurement()" [disabled]="busy">
+        <app-ui-icon name="save" />
+        Save Units &amp; Calendar
+      </button>
+    </div>
+    </div>
+  </details>
+
+  <details
+    class="panel collapsible"
+    [open]="panelOpen.llmWorld"
+    (toggle)="onPanelToggle('llmWorld', $event)"
+  >
+    <summary>
+      <span class="sum-title">LLM World-Building</span>
+      <span class="sum-preview">{{ llmWorldSummary }}</span>
+      <span class="panel-sum-actions">
+        <button
+          type="button"
+          class="btn-icon"
+          title="Expand section"
+          (click)="expandPanel('llmWorld', $event)"
+          [disabled]="panelOpen.llmWorld"
+        >
+          <app-ui-icon name="chevron-down" />
+          <span class="sr-only">Expand section</span>
+        </button>
+        <button
+          type="button"
+          class="btn-icon"
+          title="Collapse section"
+          (click)="collapsePanel('llmWorld', $event)"
+          [disabled]="!panelOpen.llmWorld"
+        >
+          <app-ui-icon name="chevron-up" />
+          <span class="sr-only">Collapse section</span>
+        </button>
+      </span>
+    </summary>
+    <div class="collapsible-inner">
+    <p class="hint">Requires Ollama. Uses the story profile above.</p>
+    <label for="extract">Paste Text to Extract Canon From</label>
+    <textarea id="extract" rows="5" [(ngModel)]="extractText" [disabled]="busy" [title]="fieldHelp.extractText"></textarea>
+    <button type="button" class="btn-with-icon" (click)="runExtract()" [disabled]="busy">
+      <app-ui-icon name="clipboard" />
+      Extract Entries
+    </button>
+
+    <label for="gen">Prompt to Generate New Entries</label>
+    <textarea id="gen" rows="3" [(ngModel)]="generatePrompt" [disabled]="busy" [title]="fieldHelp.generatePrompt"></textarea>
+    <button type="button" class="btn-with-icon" (click)="runGenerate()" [disabled]="busy">
+      <app-ui-icon name="sparkles" />
+      Generate Entries
+    </button>
+    </div>
+  </details>
+
+  <details
+    class="panel collapsible world-elements"
+    [open]="panelOpen.worldElements"
+    (toggle)="onPanelToggle('worldElements', $event)"
+  >
+    <summary>
+      <span class="sum-title">World Elements</span>
+      <span class="sum-preview">{{ worldElementsSummary }}</span>
+      <span class="panel-sum-actions">
+        <button
+          type="button"
+          class="btn-icon"
+          title="Expand section"
+          (click)="expandPanel('worldElements', $event)"
+          [disabled]="panelOpen.worldElements"
+        >
+          <app-ui-icon name="chevron-down" />
+          <span class="sr-only">Expand section</span>
+        </button>
+        <button
+          type="button"
+          class="btn-icon"
+          title="Collapse section"
+          (click)="collapsePanel('worldElements', $event)"
+          [disabled]="!panelOpen.worldElements"
+        >
+          <app-ui-icon name="chevron-up" />
+          <span class="sr-only">Collapse section</span>
+        </button>
+      </span>
+    </summary>
+    <div class="collapsible-inner">
+    <div class="world-elements-toolbar">
+      <div class="world-elements-search">
+        <label for="search">Search (Server)</label>
+        <input
+          id="search"
+          type="search"
+          [(ngModel)]="elementsSearchQuery"
+          (ngModelChange)="onElementsSearchInput($event)"
+          placeholder="Title, kind, summary, detail…"
+          [disabled]="busy"
+          [title]="fieldHelp.elementsSearch"
+        />
+      </div>
+      <button
+        type="button"
+        class="primary btn-with-icon world-elements-add-btn"
+        (click)="openAddElementModal()"
+        [disabled]="busy"
+      >
+        <app-ui-icon name="plus" />
+        Add Entry
+      </button>
+      <div class="world-elements-glossary">
+        <label class="glossary-llm-toggle">
+          <input
+            type="checkbox"
+            [(ngModel)]="glossaryUseLlm"
+            [disabled]="busy || glossaryBusy"
+            [title]="fieldHelp.glossaryUseLlm"
+          />
+          LLM alternate names
+        </label>
+        <button
+          type="button"
+          class="btn-with-icon"
+          (click)="downloadGlossary()"
+          [disabled]="busy || glossaryBusy"
+          [title]="fieldHelp.glossaryDownload"
+        >
+          @if (glossaryBusy) {
+            Generating…
+          } @else {
+            <app-ui-icon name="save" />
+            Download glossary (.md)
+          }
+        </button>
+      </div>
+    </div>
+    <div class="pager" role="navigation" aria-label="World elements pages">
+      <button
+        type="button"
+        class="btn-icon"
+        title="First page"
+        (click)="elementsFirstPage()"
+        [disabled]="busy || elementsTotalCount === 0 || elementsOnFirstPage()"
+      >
+        <app-ui-icon name="chevrons-left" />
+        <span class="sr-only">First page</span>
+      </button>
+      <button
+        type="button"
+        class="btn-icon"
+        title="Previous page"
+        (click)="elementsPrevPage()"
+        [disabled]="busy || elementsTotalCount === 0 || elementsOnFirstPage()"
+      >
+        <app-ui-icon name="chevron-left" />
+        <span class="sr-only">Previous page</span>
+      </button>
+      <span class="pager-info">{{ elementsRangeLabel() }} · 10 per page</span>
+      <button
+        type="button"
+        class="btn-icon"
+        title="Next page"
+        (click)="elementsNextPage()"
+        [disabled]="busy || elementsTotalCount === 0 || !elementsHasNext()"
+      >
+        <app-ui-icon name="chevron-right" />
+        <span class="sr-only">Next page</span>
+      </button>
+      <button
+        type="button"
+        class="btn-icon"
+        title="Last page"
+        (click)="elementsLastPage()"
+        [disabled]="busy || elementsTotalCount === 0 || elementsOnLastPage()"
+      >
+        <app-ui-icon name="chevrons-right" />
+        <span class="sr-only">Last page</span>
+      </button>
+    </div>
+
+    <table class="elements-table">
       <thead>
         <tr>
           <th>Kind</th>
           <th>Title</th>
           <th>Summary</th>
           <th>Status</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
-        @for (el of elements; track el.id) {
+        @for (el of elementsPage; track el.id) {
           <tr>
             <td>{{ el.kind }}</td>
             <td>{{ el.title }}</td>
-            <td>{{ el.summary }}</td>
+            <td class="summary-cell">{{ el.summary }}</td>
             <td>{{ el.status }}</td>
+            <td class="actions">
+              <button
+                type="button"
+                class="btn-icon"
+                title="Review links and timeline (AI)"
+                (click)="startLinkCanonReview(el)"
+                [disabled]="busy || linkCanonReviewBusy"
+              >
+                <app-ui-icon name="sparkles" />
+                <span class="sr-only">Review links and timeline</span>
+              </button>
+              <button type="button" class="btn-icon" title="Edit" (click)="startEdit(el)" [disabled]="busy">
+                <app-ui-icon name="pencil" />
+                <span class="sr-only">Edit</span>
+              </button>
+              <button type="button" class="danger btn-icon" title="Delete" (click)="deleteElement(el)" [disabled]="busy">
+                <app-ui-icon name="trash" />
+                <span class="sr-only">Delete</span>
+              </button>
+            </td>
           </tr>
         }
       </tbody>
     </table>
-  </section>
+    @if (elementsTotalCount === 0) {
+      <p>
+        {{
+          elementsSearchQuery.trim()
+            ? 'No world elements match your search.'
+            : 'No entries yet. Extract, generate, or click Add Entry.'
+        }}
+      </p>
+    }
+    @if (elementsPage.length === 0 && elementsTotalCount > 0) {
+      <p>No entries on this page.</p>
+    }
+    </div>
+  </details>
+
+  @if (addElementModalOpen) {
+    <div class="modal-backdrop" (click)="closeAddElementModal()" aria-hidden="true"></div>
+    <div
+      class="modal-panel element-form-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="add-element-title"
+      (click)="$event.stopPropagation()"
+    >
+      <div class="element-modal-header">
+        <h2 id="add-element-title">Add Entry</h2>
+        <button type="button" class="modal-close-btn" (click)="closeAddElementModal()" aria-label="Close">×</button>
+      </div>
+      <label for="modal-new-kind">Kind</label>
+      <select id="modal-new-kind" [(ngModel)]="newKind" [disabled]="busy" [title]="fieldHelp.worldElementKind">
+        @for (k of kinds; track k) {
+          <option [ngValue]="k">{{ k }}</option>
+        }
+      </select>
+      <label for="modal-new-title">Title</label>
+      <input id="modal-new-title" type="text" [(ngModel)]="newTitle" [disabled]="busy" [title]="fieldHelp.worldElementTitle" />
+      <label for="modal-new-slug">Slug (Optional)</label>
+      <input id="modal-new-slug" type="text" [(ngModel)]="newSlug" [disabled]="busy" [title]="fieldHelp.worldElementSlug" />
+      <label for="modal-new-summary">Summary</label>
+      <textarea
+        id="modal-new-summary"
+        class="element-modal-textarea element-modal-textarea--summary"
+        rows="6"
+        [(ngModel)]="newSummary"
+        [disabled]="busy"
+        [title]="fieldHelp.worldElementSummary"
+      ></textarea>
+      <label for="modal-new-detail">Detail</label>
+      <textarea
+        id="modal-new-detail"
+        class="element-modal-textarea element-modal-textarea--detail"
+        rows="14"
+        [(ngModel)]="newDetail"
+        [disabled]="busy"
+        [title]="fieldHelp.worldElementDetail"
+      ></textarea>
+      <label for="modal-new-status">Status</label>
+      <select id="modal-new-status" [(ngModel)]="newStatus" [disabled]="busy" [title]="fieldHelp.worldElementStatus">
+        @for (s of statuses; track s) {
+          <option [ngValue]="s">{{ s }}</option>
+        }
+      </select>
+      <div class="modal-actions">
+        <button type="button" class="primary btn-with-icon" (click)="createElement()" [disabled]="busy">
+          <app-ui-icon name="plus" />
+          Create Entry
+        </button>
+        <button type="button" class="btn-with-icon" (click)="closeAddElementModal()" [disabled]="busy">
+          <app-ui-icon name="x" />
+          Cancel
+        </button>
+      </div>
+    </div>
+  }
+
+  @if (editing) {
+    <div class="modal-backdrop" (click)="cancelEdit()" aria-hidden="true"></div>
+    <div
+      class="modal-panel element-form-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="edit-element-title"
+      (click)="$event.stopPropagation()"
+    >
+      <div class="element-modal-header">
+        <h2 id="edit-element-title">Edit Entry</h2>
+        <button type="button" class="modal-close-btn" (click)="cancelEdit()" aria-label="Close">×</button>
+      </div>
+      <p class="hint element-modal-subtitle">{{ editEntrySummary }}</p>
+      <label for="modal-edit-kind">Kind</label>
+      <select id="modal-edit-kind" [(ngModel)]="editKind" [disabled]="busy" [title]="fieldHelp.worldElementKind">
+        @for (k of kinds; track k) {
+          <option [ngValue]="k">{{ k }}</option>
+        }
+      </select>
+      <label for="modal-edit-title">Title</label>
+      <input id="modal-edit-title" type="text" [(ngModel)]="editTitle" [disabled]="busy" [title]="fieldHelp.worldElementTitle" />
+      <label for="modal-edit-slug">Slug (Optional)</label>
+      <input id="modal-edit-slug" type="text" [(ngModel)]="editSlug" [disabled]="busy" [title]="fieldHelp.worldElementSlug" />
+      <label for="modal-edit-summary">Summary</label>
+      <textarea
+        id="modal-edit-summary"
+        class="element-modal-textarea element-modal-textarea--summary"
+        rows="6"
+        [(ngModel)]="editSummary"
+        [disabled]="busy"
+        [title]="fieldHelp.worldElementSummary"
+      ></textarea>
+      <label for="modal-edit-detail">Detail</label>
+      <textarea
+        id="modal-edit-detail"
+        class="element-modal-textarea element-modal-textarea--detail"
+        rows="14"
+        [(ngModel)]="editDetail"
+        [disabled]="busy"
+        [title]="fieldHelp.worldElementDetail"
+      ></textarea>
+      <label for="modal-edit-status">Status</label>
+      <select id="modal-edit-status" [(ngModel)]="editStatus" [disabled]="busy" [title]="fieldHelp.worldElementStatus">
+        @for (s of statuses; track s) {
+          <option [ngValue]="s">{{ s }}</option>
+        }
+      </select>
+      <div class="modal-actions">
+        <button type="button" class="primary btn-with-icon" (click)="saveEdit()" [disabled]="busy">
+          <app-ui-icon name="save" />
+          Save
+        </button>
+        <button type="button" class="btn-with-icon" (click)="cancelEdit()" [disabled]="busy">
+          <app-ui-icon name="x" />
+          Cancel
+        </button>
+      </div>
+    </div>
+  }
+
+  <details
+    class="panel collapsible links"
+    [open]="panelOpen.links"
+    (toggle)="onPanelToggle('links', $event)"
+  >
+    <summary>
+      <span class="sum-title">Links</span>
+      <span class="sum-preview">{{ linksSummary }}</span>
+      <span class="panel-sum-actions">
+        <button
+          type="button"
+          class="btn-icon"
+          title="Expand section"
+          (click)="expandPanel('links', $event)"
+          [disabled]="panelOpen.links"
+        >
+          <app-ui-icon name="chevron-down" />
+          <span class="sr-only">Expand section</span>
+        </button>
+        <button
+          type="button"
+          class="btn-icon"
+          title="Collapse section"
+          (click)="collapsePanel('links', $event)"
+          [disabled]="!panelOpen.links"
+        >
+          <app-ui-icon name="chevron-up" />
+          <span class="sr-only">Collapse section</span>
+        </button>
+      </span>
+    </summary>
+    <div class="collapsible-inner">
+    <p class="hint">Directed relations between world elements (e.g. &quot;located_in&quot;, &quot;knows&quot;).</p>
+    <label for="links-search">Search Links</label>
+    <input
+      id="links-search"
+      type="search"
+      [(ngModel)]="linksSearchQuery"
+      (ngModelChange)="onLinksSearchInput($event)"
+      placeholder="From, to, or relation…"
+      [disabled]="busy"
+      [title]="fieldHelp.linksSearch"
+    />
+    <div class="pager" role="navigation" aria-label="Links pages">
+      <button
+        type="button"
+        class="btn-icon"
+        title="First page"
+        (click)="linksFirstPage()"
+        [disabled]="busy || linksTotalCount === 0 || linksOnFirstPage()"
+      >
+        <app-ui-icon name="chevrons-left" />
+        <span class="sr-only">First page</span>
+      </button>
+      <button
+        type="button"
+        class="btn-icon"
+        title="Previous page"
+        (click)="linksPrevPage()"
+        [disabled]="busy || linksTotalCount === 0 || linksOnFirstPage()"
+      >
+        <app-ui-icon name="chevron-left" />
+        <span class="sr-only">Previous page</span>
+      </button>
+      <span class="pager-info">{{ linksRangeLabel() }} · 10 per page</span>
+      <button
+        type="button"
+        class="btn-icon"
+        title="Next page"
+        (click)="linksNextPage()"
+        [disabled]="busy || linksTotalCount === 0 || !linksHasNext()"
+      >
+        <app-ui-icon name="chevron-right" />
+        <span class="sr-only">Next page</span>
+      </button>
+      <button
+        type="button"
+        class="btn-icon"
+        title="Last page"
+        (click)="linksLastPage()"
+        [disabled]="busy || linksTotalCount === 0 || linksOnLastPage()"
+      >
+        <app-ui-icon name="chevrons-right" />
+        <span class="sr-only">Last page</span>
+      </button>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>From</th>
+          <th>Relation</th>
+          <th>To</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (row of linksPage; track row.id) {
+          <tr>
+            <td>{{ row.fromTitle }}</td>
+            <td>{{ formatRelationLabel(row.relationLabel) }}</td>
+            <td>{{ row.toTitle }}</td>
+            <td>
+              <button type="button" class="danger btn-icon" title="Remove link" (click)="removeLink(row)" [disabled]="busy">
+                <app-ui-icon name="trash" />
+                <span class="sr-only">Remove link</span>
+              </button>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+    @if (linksTotalCount === 0) {
+      <p>
+        {{
+          linksSearchQuery.trim()
+            ? 'No links match your search.'
+            : 'No links yet. Add one below or use world-building tools.'
+        }}
+      </p>
+    }
+    @if (linksPage.length === 0 && linksTotalCount > 0) {
+      <p>No links on this page.</p>
+    }
+
+    <h3 class="sub">New Link</h3>
+    <div class="link-form">
+      <label>
+        From
+        <select [(ngModel)]="linkFromId" [disabled]="busy" [title]="fieldHelp.linkFrom">
+          <option value="">—</option>
+          @for (el of pickerElements; track el.id) {
+            <option [ngValue]="el.id">{{ el.title }}</option>
+          }
+        </select>
+      </label>
+      <label>
+        To
+        <select [(ngModel)]="linkToId" [disabled]="busy" [title]="fieldHelp.linkTo">
+          <option value="">—</option>
+          @for (el of pickerElements; track el.id) {
+            <option [ngValue]="el.id">{{ el.title }}</option>
+          }
+        </select>
+      </label>
+      <label>
+        Label
+        <input
+          type="text"
+          [(ngModel)]="linkLabel"
+          placeholder="e.g. Located in"
+          [disabled]="busy"
+          [title]="fieldHelp.linkLabel"
+        />
+      </label>
+    </div>
+    <button type="button" class="btn-with-icon" (click)="addLink()" [disabled]="busy">
+      <app-ui-icon name="plus" />
+      Add Link
+    </button>
+    </div>
+  </details>
+
+  @if (llmSuggestWorking) {
+    <div class="modal-backdrop modal-backdrop-busy" aria-hidden="true"></div>
+    <div class="modal-panel modal-working" role="dialog" aria-modal="true" aria-labelledby="llm-working-title" (click)="$event.stopPropagation()">
+      <h2 id="llm-working-title">Finding Link Suggestions</h2>
+      <p class="hint">The model is proposing relations between your entries. This may take a moment.</p>
+    </div>
+  }
+
+  @if (linkCanonReviewBusy) {
+    <div class="modal-backdrop modal-backdrop-busy" aria-hidden="true"></div>
+    <div
+      class="modal-panel modal-working"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="link-canon-working-title"
+      (click)="$event.stopPropagation()"
+    >
+      <h2 id="link-canon-working-title">Reviewing links and timeline</h2>
+      <p class="hint">
+        The model is reviewing all world elements, links, and timeline rows for this book. Large books run in multiple passes;
+        this may take a while.
+      </p>
+    </div>
+  }
+
+  @if (linkSuggestionModalOpen) {
+    <div class="modal-backdrop" (click)="closeSuggestedLinksModal()" aria-hidden="true"></div>
+    <div
+      class="modal-panel suggest-links-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="suggest-links-title"
+      (click)="$event.stopPropagation()"
+    >
+      <h2 id="suggest-links-title">Suggested Links</h2>
+      <p class="hint">
+        The model proposes relations between entries. Edit the relationship label if needed. Uncheck any you do not want, then
+        confirm. Nothing is saved until you click &quot;Create selected links&quot;.
+      </p>
+      <div class="suggest-list">
+        @for (link of suggestedLinks; track $index; let i = $index) {
+          <div class="suggest-row">
+            <input
+              type="checkbox"
+              [checked]="suggestedLinksAccepted[i]"
+              (change)="toggleSuggestedLink(i)"
+              [title]="fieldHelp.suggestedLinkCheckbox"
+            />
+            <div class="suggest-row-main">
+              <div class="suggest-text">
+                <strong>{{ link.fromTitle }}</strong>
+                <span class="rel">{{ formatRelationLabel(link.relationLabel) }}</span>
+                <strong>{{ link.toTitle }}</strong>
+              </div>
+              <label class="suggest-rel-edit">
+                Relationship
+                <input
+                  type="text"
+                  [(ngModel)]="suggestedLinkRelationDrafts[i]"
+                  [name]="'srel' + i"
+                  [disabled]="suggestModalBusy"
+                  [title]="fieldHelp.linkLabel"
+                  placeholder="e.g. Located in"
+                />
+              </label>
+            </div>
+          </div>
+        }
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-with-icon" (click)="acceptAllSuggestedLinks()" [disabled]="suggestModalBusy">
+          <app-ui-icon name="check" />
+          Select all
+        </button>
+        <button type="button" class="btn-with-icon" (click)="rejectAllSuggestedLinks()" [disabled]="suggestModalBusy">
+          <app-ui-icon name="x" />
+          Deselect all
+        </button>
+        <button type="button" class="primary btn-with-icon" (click)="applySuggestedLinksFromModal()" [disabled]="suggestModalBusy">
+          <app-ui-icon name="plus" />
+          Create selected links
+        </button>
+        <button type="button" class="btn-with-icon" (click)="closeSuggestedLinksModal()" [disabled]="suggestModalBusy">
+          <app-ui-icon name="x" />
+          Cancel
+        </button>
+      </div>
+    </div>
+  }
+
+  @if (linkCanonModalOpen) {
+    <div class="modal-backdrop" (click)="closeLinkCanonModal()" aria-hidden="true"></div>
+    <div
+      class="modal-panel link-canon-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="link-canon-title"
+      (click)="$event.stopPropagation()"
+    >
+      <h2 id="link-canon-title">Canon review: {{ linkCanonFocusTitle }}</h2>
+      <p class="hint">
+        Proposed changes across all links and timeline rows for this book (from one or more model passes). Check &quot;Include&quot;
+        for each change you want, use Edit to adjust relation labels or targets, then Apply selected.
+      </p>
+      @if (linkCanonRows.length === 0) {
+        <p>No changes proposed. You can close this dialog.</p>
+      }
+      <div class="link-canon-list">
+        @for (row of linkCanonRows; track row.proposal.id; let i = $index) {
+          <div class="link-canon-row" [class.rejected]="!row.accepted">
+            <div class="link-canon-row-head">
+              <label class="link-canon-include">
+                <input type="checkbox" [checked]="row.accepted" (change)="toggleLinkCanonAccepted(i)" />
+                Include
+              </label>
+              <p class="link-canon-summary">{{ linkCanonSummary(row) }}</p>
+              <button type="button" class="btn-with-icon link-canon-edit-btn" (click)="setLinkCanonEditing(i, !row.editing)">
+                <app-ui-icon [name]="row.editing ? 'check' : 'pencil'" />
+                {{ row.editing ? 'Done' : 'Edit' }}
+              </button>
+            </div>
+            <p class="hint link-canon-rationale">{{ row.proposal.rationale }}</p>
+            @if (row.editing) {
+              <div class="link-canon-edit">
+                @if (row.proposal.kind === 'add_link') {
+                  <label>
+                    From
+                    <select [(ngModel)]="row.fromWorldElementIdDraft" [name]="'lcf' + i" [disabled]="linkCanonApplyBusy">
+                      @for (opt of pickerElements; track opt.id) {
+                        <option [ngValue]="opt.id">{{ opt.kind }}: {{ opt.title }}</option>
+                      }
+                    </select>
+                  </label>
+                  <label>
+                    To
+                    <select [(ngModel)]="row.toWorldElementIdDraft" [name]="'lct' + i" [disabled]="linkCanonApplyBusy">
+                      @for (opt of pickerElements; track opt.id) {
+                        <option [ngValue]="opt.id">{{ opt.kind }}: {{ opt.title }}</option>
+                      }
+                    </select>
+                  </label>
+                  <label>
+                    Relation
+                    <input type="text" [(ngModel)]="row.relationLabelDraft" [name]="'lcr' + i" [disabled]="linkCanonApplyBusy" />
+                  </label>
+                }
+                @if (row.proposal.kind === 'change_relation') {
+                  <label>
+                    New relation label
+                    <input
+                      type="text"
+                      [(ngModel)]="row.newRelationLabelDraft"
+                      [name]="'lcnr' + i"
+                      [disabled]="linkCanonApplyBusy"
+                    />
+                  </label>
+                }
+                @if (row.proposal.kind === 'set_timeline_link') {
+                  <label>
+                    Linked world entry
+                    <select
+                      [(ngModel)]="row.proposedWorldElementIdDraft"
+                      [name]="'lcwe' + i"
+                      [disabled]="linkCanonApplyBusy"
+                    >
+                      <option [ngValue]="''">— clear —</option>
+                      @for (opt of pickerElements; track opt.id) {
+                        <option [ngValue]="opt.id">{{ opt.kind }}: {{ opt.title }}</option>
+                      }
+                    </select>
+                  </label>
+                }
+              </div>
+            }
+          </div>
+        }
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-with-icon" (click)="acceptAllLinkCanon()" [disabled]="linkCanonApplyBusy">
+          <app-ui-icon name="check" />
+          Include all
+        </button>
+        <button type="button" class="btn-with-icon" (click)="rejectAllLinkCanon()" [disabled]="linkCanonApplyBusy">
+          <app-ui-icon name="x" />
+          Include none
+        </button>
+        <button type="button" class="primary btn-with-icon" (click)="applyLinkCanonFromModal()" [disabled]="linkCanonApplyBusy">
+          <app-ui-icon name="save" />
+          Apply selected
+        </button>
+        <button type="button" class="btn-with-icon" (click)="closeLinkCanonModal()" [disabled]="linkCanonApplyBusy">
+          <app-ui-icon name="x" />
+          Cancel
+        </button>
+      </div>
+    </div>
+  }
+
+  <app-timeline-viz-modal
+    [open]="timelineVizOpen"
+    [entries]="timelineVizEntries"
+    (closed)="closeTimelineViz()"
+  />
 </section>

@@ -1,1 +1,11 @@
-<router-outlet />
+<header class="app-header">
+  <a routerLink="/" class="brand">Creative Longform</a>
+  <nav class="nav">
+    <a routerLink="/">Stories</a>
+    <a routerLink="/scenes">Scenes</a>
+    <a routerLink="/new-story">New story</a>
+  </nav>
+</header>
+<main class="app-main">
+  <router-outlet />
+</main>

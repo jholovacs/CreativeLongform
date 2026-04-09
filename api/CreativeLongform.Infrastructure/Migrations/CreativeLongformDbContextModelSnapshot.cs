@@ -46,6 +46,10 @@ namespace CreativeLongform.Infrastructure.Migrations
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)");
 
+                    b.Property<string>("Synopsis")
+                        .HasMaxLength(16000)
+                        .HasColumnType("character varying(16000)");
+
                     b.Property<string>("Title")
                         .IsRequired()
                         .HasMaxLength(512)
@@ -66,6 +70,11 @@ namespace CreativeLongform.Infrastructure.Migrations
 
                     b.Property<Guid>("BookId")
                         .HasColumnType("uuid");
+
+                    b.Property<bool>("IsComplete")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
 
                     b.Property<int>("Order")
                         .HasColumnType("integer");
@@ -140,6 +149,9 @@ namespace CreativeLongform.Infrastructure.Migrations
                     b.Property<int>("MaxRepairIterations")
                         .HasColumnType("integer");
 
+                    b.Property<int?>("MinWordsOverride")
+                        .HasColumnType("integer");
+
                     b.Property<Guid>("SceneId")
                         .HasColumnType("uuid");
 
@@ -148,6 +160,11 @@ namespace CreativeLongform.Infrastructure.Migrations
 
                     b.Property<int>("Status")
                         .HasColumnType("integer");
+
+                    b.Property<bool>("StopAfterDraft")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
 
                     b.HasKey("Id");
 
@@ -205,6 +222,12 @@ namespace CreativeLongform.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("ApprovedStateTableJson")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("BeginningStateJson")
+                        .HasColumnType("jsonb");
+
                     b.Property<Guid>("ChapterId")
                         .HasColumnType("uuid");
 
@@ -220,8 +243,21 @@ namespace CreativeLongform.Infrastructure.Migrations
                     b.Property<string>("LatestDraftText")
                         .HasColumnType("text");
 
+                    b.Property<string>("NarrativePerspective")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("NarrativeTense")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<int>("Order")
                         .HasColumnType("integer");
+
+                    b.Property<string>("Synopsis")
+                        .IsRequired()
+                        .HasMaxLength(16000)
+                        .HasColumnType("character varying(16000)");
 
                     b.Property<string>("Title")
                         .IsRequired()
@@ -278,6 +314,64 @@ namespace CreativeLongform.Infrastructure.Migrations
                     b.HasIndex("GenerationRunId");
 
                     b.ToTable("StateSnapshots");
+                });
+
+            modelBuilder.Entity("CreativeLongform.Domain.Entities.TimelineEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("BookId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CurrencyPairAuthority")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<string>("CurrencyPairBase")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("CurrencyPairExchangeNote")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<string>("CurrencyPairQuote")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid?>("SceneId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("SortKey")
+                        .HasColumnType("numeric");
+
+                    b.Property<string>("Summary")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<Guid?>("WorldElementId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SceneId")
+                        .IsUnique();
+
+                    b.HasIndex("WorldElementId");
+
+                    b.HasIndex("BookId", "SortKey");
+
+                    b.ToTable("TimelineEntries");
                 });
 
             modelBuilder.Entity("CreativeLongform.Domain.Entities.WorldElement", b =>
@@ -452,6 +546,31 @@ namespace CreativeLongform.Infrastructure.Migrations
                     b.Navigation("GenerationRun");
                 });
 
+            modelBuilder.Entity("CreativeLongform.Domain.Entities.TimelineEntry", b =>
+                {
+                    b.HasOne("CreativeLongform.Domain.Entities.Book", "Book")
+                        .WithMany("TimelineEntries")
+                        .HasForeignKey("BookId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("CreativeLongform.Domain.Entities.Scene", "Scene")
+                        .WithOne("TimelineEntry")
+                        .HasForeignKey("CreativeLongform.Domain.Entities.TimelineEntry", "SceneId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.HasOne("CreativeLongform.Domain.Entities.WorldElement", "WorldElement")
+                        .WithMany("TimelineEntries")
+                        .HasForeignKey("WorldElementId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Book");
+
+                    b.Navigation("Scene");
+
+                    b.Navigation("WorldElement");
+                });
+
             modelBuilder.Entity("CreativeLongform.Domain.Entities.WorldElement", b =>
                 {
                     b.HasOne("CreativeLongform.Domain.Entities.Book", "Book")
@@ -486,6 +605,8 @@ namespace CreativeLongform.Infrastructure.Migrations
                 {
                     b.Navigation("Chapters");
 
+                    b.Navigation("TimelineEntries");
+
                     b.Navigation("WorldElements");
 
                     b.Navigation("WorldLlmCalls");
@@ -510,6 +631,8 @@ namespace CreativeLongform.Infrastructure.Migrations
                     b.Navigation("GenerationRuns");
 
                     b.Navigation("SceneWorldElements");
+
+                    b.Navigation("TimelineEntry");
                 });
 
             modelBuilder.Entity("CreativeLongform.Domain.Entities.WorldElement", b =>
@@ -519,6 +642,8 @@ namespace CreativeLongform.Infrastructure.Migrations
                     b.Navigation("OutgoingLinks");
 
                     b.Navigation("SceneWorldElements");
+
+                    b.Navigation("TimelineEntries");
                 });
 #pragma warning restore 612, 618
         }

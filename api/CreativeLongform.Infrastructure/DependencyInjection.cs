@@ -32,6 +32,7 @@ public static class DependencyInjection
             client.Timeout = TimeSpan.FromMinutes(15);
         });
 
+        services.AddSingleton<IGenerationRunCancellationRegistry, GenerationRunCancellationRegistry>();
         services.AddScoped<IGenerationOrchestrator, GenerationOrchestrator>();
         services.AddScoped<IWorldBuildingService, WorldBuildingService>();
 

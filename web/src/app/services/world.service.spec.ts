@@ -22,6 +22,7 @@ describe('WorldService', () => {
     service.getWorldElements(bookId).subscribe();
     const req = httpMock.expectOne((r) => r.url.endsWith('/odata/WorldElements'));
     expect(req.request.params.get('$filter')).toContain(bookId);
+    expect(req.request.params.get('$top')).toBe('1000');
     req.flush({ value: [] });
   });
 

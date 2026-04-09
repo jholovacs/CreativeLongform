@@ -1,65 +1,762 @@
 <section class="scene-workflow">
+  <nav class="crumb">
+    <a routerLink="/" class="crumb-link"><app-ui-icon name="arrow-left" /><span>Stories</span></a>
+    <span class="crumb-sep" aria-hidden="true">·</span>
+    <span class="crumb-current" aria-current="page">Scene Workflow</span>
+  </nav>
+
   <header>
-    <h1>Creative Longform</h1>
-    <p class="subtitle">Load scenes from OData, run the pipeline, and watch SignalR progress.</p>
+    <h1>Scene Workflow</h1>
+    <p class="subtitle">
+      Choose where you are in the story, write a synopsis, link world elements, set voice (perspective / tense), then generate a
+      draft with live progress. Review the prose, finalize to build the end-state table, and mark the chapter complete when ready.
+    </p>
     @if (selectedBookId) {
-      <p><a [routerLink]="['/book', selectedBookId]">Story &amp; world settings</a></p>
+      <p class="meta">
+        Book: {{ currentBookTitle }} ·
+        <a [routerLink]="['/book', selectedBookId]">Story &amp; World Settings</a>
+      </p>
     }
   </header>
 
   <div class="actions">
-    <button type="button" (click)="loadBooks()" [disabled]="busy">Reload books</button>
-    <button type="button" (click)="startGeneration()" [disabled]="busy || !selectedSceneId">
-      Start generation
-    </button>
+    <button type="button" (click)="loadBooks()" [disabled]="busy" [title]="fieldHelp.reload">Reload</button>
   </div>
 
   @if (error) {
     <p class="error">{{ error }}</p>
   }
 
-  <div class="scene-pick">
-    <label for="scene-select">Scene</label>
-    <select id="scene-select" [value]="selectedSceneId ?? ''" (change)="selectScene($event)">
-      @for (row of scenesForUi(); track row.scene.id) {
-        <option [value]="row.scene.id">{{ row.label }}</option>
-      }
-    </select>
-  </div>
+  @if (books.length === 0) {
+    <p>Create a story from the home page first.</p>
+  } @else {
+    <details
+      class="panel collapsible"
+      [open]="panelOpen.storyPosition"
+      (toggle)="onPanelToggle('storyPosition', $event)"
+    >
+      <summary>
+        <span class="sum-title">Story Position</span>
+        <span class="sum-preview">{{ storyPositionSummary }}</span>
+        <span class="panel-sum-actions">
+          <button
+            type="button"
+            class="btn-icon"
+            title="Expand section"
+            (click)="expandPanel('storyPosition', $event)"
+            [disabled]="panelOpen.storyPosition"
+          >
+            <app-ui-icon name="chevron-down" />
+            <span class="sr-only">Expand section</span>
+          </button>
+          <button
+            type="button"
+            class="btn-icon"
+            title="Collapse section"
+            (click)="collapsePanel('storyPosition', $event)"
+            [disabled]="!panelOpen.storyPosition"
+          >
+            <app-ui-icon name="chevron-up" />
+            <span class="sr-only">Collapse section</span>
+          </button>
+        </span>
+      </summary>
+      <div class="collapsible-inner">
+        <div class="row nav-row-fields">
+          <label [title]="fieldHelp.bookSelect">
+            Book
+            <select [(ngModel)]="selectedBookId" (ngModelChange)="onBookChange()" [disabled]="busy" id="sw-book">
+              @for (b of books; track b.id) {
+                <option [ngValue]="b.id">{{ b.title }}</option>
+              }
+            </select>
+          </label>
+          <label [title]="fieldHelp.chapterSelect">
+            Chapter
+            <select [(ngModel)]="selectedChapterId" (ngModelChange)="onChapterChange()" [disabled]="busy" id="sw-chapter">
+              @for (ch of chaptersForBook(); track ch.id) {
+                <option [ngValue]="ch.id">{{ ch.title }}</option>
+              }
+            </select>
+          </label>
+          <label [title]="fieldHelp.sceneSelect">
+            Scene
+            <select [(ngModel)]="selectedSceneId" (ngModelChange)="onSceneChange()" [disabled]="busy" id="sw-scene">
+              @for (sc of scenesForChapter(); track sc.id) {
+                <option [ngValue]="sc.id">{{ sc.title }} ({{ sc.order }})</option>
+              }
+            </select>
+          </label>
+        </div>
+        <label class="chapter-done" [title]="fieldHelp.chapterComplete">
+          <input
+            type="checkbox"
+            [checked]="chapterComplete"
+            (change)="toggleChapterComplete()"
+            [disabled]="busy || !selectedChapterId"
+          />
+          Chapter Complete
+        </label>
+      </div>
+    </details>
 
-  @if (selectedBookId && selectedSceneId) {
-    <section class="world-links">
-      <h2>World elements for this scene</h2>
-      <p class="hint">Checked items are injected into generation prompts as canon.</p>
-      @if (worldElements.length === 0) {
-        <p>No world elements for this book. Add them under Story &amp; world settings.</p>
-      }
-      <ul class="world-list">
-        @for (el of worldElements; track el.id) {
-          <li>
-            <label>
+    @if (selectedSceneId) {
+      <details
+        class="panel collapsible"
+        [open]="panelOpen.synopsis"
+        (toggle)="onPanelToggle('synopsis', $event)"
+      >
+        <summary>
+          <span class="sum-title">Synopsis &amp; Instructions</span>
+          <span class="sum-preview">{{ synopsisSectionSummary }}</span>
+          <span class="panel-sum-actions">
+            <button
+              type="button"
+              class="btn-icon"
+              title="Expand section"
+              (click)="expandPanel('synopsis', $event)"
+              [disabled]="panelOpen.synopsis"
+            >
+              <app-ui-icon name="chevron-down" />
+              <span class="sr-only">Expand section</span>
+            </button>
+            <button
+              type="button"
+              class="btn-icon"
+              title="Collapse section"
+              (click)="collapsePanel('synopsis', $event)"
+              [disabled]="!panelOpen.synopsis"
+            >
+              <app-ui-icon name="chevron-up" />
+              <span class="sr-only">Collapse section</span>
+            </button>
+          </span>
+        </summary>
+        <div class="collapsible-inner">
+          <p class="hint">Synopsis is the main beat for this scene. Additional instructions refine constraints.</p>
+          <label for="synopsis">Synopsis</label>
+          <textarea
+            id="synopsis"
+            rows="4"
+            [(ngModel)]="synopsis"
+            [disabled]="busy"
+            [title]="fieldHelp.synopsis"
+          ></textarea>
+          <label for="instr">Additional Instructions</label>
+          <textarea
+            id="instr"
+            rows="2"
+            [(ngModel)]="instructions"
+            [disabled]="busy"
+            [title]="fieldHelp.instructions"
+          ></textarea>
+          <label for="endn">Expected End Notes (Optional)</label>
+          <textarea
+            id="endn"
+            rows="2"
+            [(ngModel)]="expectedEnd"
+            [disabled]="busy"
+            [title]="fieldHelp.expectedEnd"
+          ></textarea>
+          <button type="button" class="primary btn-with-icon" (click)="saveSceneFields()" [disabled]="busy || worldBusy">
+            <app-ui-icon name="save" />
+            Save Scene
+          </button>
+        </div>
+      </details>
+
+      <details class="panel collapsible" [open]="panelOpen.voice" (toggle)="onPanelToggle('voice', $event)">
+        <summary>
+          <span class="sum-title">Voice</span>
+          <span class="sum-preview">{{ voiceSummary }}</span>
+          <span class="panel-sum-actions">
+            <button
+              type="button"
+              class="btn-icon"
+              title="Expand section"
+              (click)="expandPanel('voice', $event)"
+              [disabled]="panelOpen.voice"
+            >
+              <app-ui-icon name="chevron-down" />
+              <span class="sr-only">Expand section</span>
+            </button>
+            <button
+              type="button"
+              class="btn-icon"
+              title="Collapse section"
+              (click)="collapsePanel('voice', $event)"
+              [disabled]="!panelOpen.voice"
+            >
+              <app-ui-icon name="chevron-up" />
+              <span class="sr-only">Collapse section</span>
+            </button>
+          </span>
+        </summary>
+        <div class="collapsible-inner">
+          <div class="row nav-row-fields">
+            <label [title]="fieldHelp.narrativePerspective">
+              Perspective
               <input
-                type="checkbox"
-                [checked]="isWorldSelected(el.id)"
-                (change)="toggleWorld(el.id, $event)"
-                [disabled]="worldBusy"
+                type="text"
+                [(ngModel)]="narrativePerspective"
+                placeholder="e.g. third limited"
+                [disabled]="busy"
+                id="sw-perspective"
               />
-              <span class="we-title">{{ el.kind }} — {{ el.title }}</span>
-              <span class="we-sum">{{ el.summary }}</span>
             </label>
-          </li>
-        }
-      </ul>
-      <button type="button" (click)="saveSceneWorld()" [disabled]="worldBusy">Save scene links</button>
-    </section>
+            <label [title]="fieldHelp.narrativeTense">
+              Tense
+              <input type="text" [(ngModel)]="narrativeTense" placeholder="e.g. past" [disabled]="busy" id="sw-tense" />
+            </label>
+          </div>
+          <p class="hint">Defaults load from earlier scenes in this book when you open a scene.</p>
+        </div>
+      </details>
+
+      <details
+        class="panel collapsible"
+        [open]="panelOpen.beginningState"
+        (toggle)="onPanelToggle('beginningState', $event)"
+      >
+        <summary>
+          <span class="sum-title">Beginning State (JSON)</span>
+          <span class="sum-preview">{{ beginningStateSummary }}</span>
+          <span class="panel-sum-actions">
+            <button
+              type="button"
+              class="btn-icon"
+              title="Expand section"
+              (click)="expandPanel('beginningState', $event)"
+              [disabled]="panelOpen.beginningState"
+            >
+              <app-ui-icon name="chevron-down" />
+              <span class="sr-only">Expand section</span>
+            </button>
+            <button
+              type="button"
+              class="btn-icon"
+              title="Collapse section"
+              (click)="collapsePanel('beginningState', $event)"
+              [disabled]="!panelOpen.beginningState"
+            >
+              <app-ui-icon name="chevron-up" />
+              <span class="sr-only">Collapse section</span>
+            </button>
+          </span>
+        </summary>
+        <div class="collapsible-inner">
+          <p class="hint">
+            If there is a previous scene with a finalized run, the prior end-state is suggested. Override with your own JSON if
+            needed.
+          </p>
+          <label for="begin-json">Beginning State JSON</label>
+          <textarea
+            id="begin-json"
+            rows="6"
+            [(ngModel)]="beginningStateJson"
+            [disabled]="busy"
+            placeholder="{}"
+            [title]="fieldHelp.beginningStateJson"
+          ></textarea>
+          <button type="button" class="primary btn-with-icon" (click)="saveSceneFields()" [disabled]="busy || worldBusy">
+            <app-ui-icon name="save" />
+            Save Scene
+          </button>
+        </div>
+      </details>
+
+      <details
+        class="panel collapsible world-panel"
+        [open]="panelOpen.worldElements"
+        (toggle)="onPanelToggle('worldElements', $event)"
+      >
+        <summary>
+          <span class="sum-title">World Elements for This Scene</span>
+          <span class="sum-preview">{{ worldElementsSummary }}</span>
+          <span class="panel-sum-actions">
+            <button
+              type="button"
+              class="btn-icon"
+              title="Expand section"
+              (click)="expandPanel('worldElements', $event)"
+              [disabled]="panelOpen.worldElements"
+            >
+              <app-ui-icon name="chevron-down" />
+              <span class="sr-only">Expand section</span>
+            </button>
+            <button
+              type="button"
+              class="btn-icon"
+              title="Collapse section"
+              (click)="collapsePanel('worldElements', $event)"
+              [disabled]="!panelOpen.worldElements"
+            >
+              <app-ui-icon name="chevron-up" />
+              <span class="sr-only">Collapse section</span>
+            </button>
+          </span>
+        </summary>
+        <div class="collapsible-inner">
+          <p class="hint">Suggested by the LLM from your synopsis; adjust before generation.</p>
+          <div class="we-toolbar world-elements-toolbar">
+            <div class="world-elements-search">
+              <label for="we-search">Search</label>
+              <input
+                id="we-search"
+                type="search"
+                [(ngModel)]="worldElementsSearchQuery"
+                (ngModelChange)="onWorldElementsSearchInput($event)"
+                placeholder="Title, kind, summary, detail…"
+                [disabled]="busy || worldBusy"
+                [title]="fieldHelp.worldElementsSearch"
+              />
+            </div>
+            <button
+              type="button"
+              class="btn-with-icon"
+              (click)="openSuggestModal()"
+              [disabled]="busy || worldBusy || suggestBusy"
+            >
+              @if (suggestBusy) {
+                Suggesting…
+              } @else {
+                <app-ui-icon name="sparkles" />
+                Suggest From Synopsis
+              }
+            </button>
+          </div>
+          <div class="pager" role="navigation" aria-label="World elements pages">
+            <button
+              type="button"
+              class="btn-icon"
+              title="First page"
+              (click)="worldElementsFirstPage()"
+              [disabled]="busy || worldBusy || worldElementsTotalCount === 0 || worldElementsOnFirstPage()"
+            >
+              <app-ui-icon name="chevrons-left" />
+              <span class="sr-only">First page</span>
+            </button>
+            <button
+              type="button"
+              class="btn-icon"
+              title="Previous page"
+              (click)="worldElementsPrevPage()"
+              [disabled]="busy || worldBusy || worldElementsTotalCount === 0 || worldElementsOnFirstPage()"
+            >
+              <app-ui-icon name="chevron-left" />
+              <span class="sr-only">Previous page</span>
+            </button>
+            <span class="pager-info">{{ worldElementsRangeLabel() }} · 10 per page</span>
+            <button
+              type="button"
+              class="btn-icon"
+              title="Next page"
+              (click)="worldElementsNextPage()"
+              [disabled]="busy || worldBusy || worldElementsTotalCount === 0 || !worldElementsHasNext()"
+            >
+              <app-ui-icon name="chevron-right" />
+              <span class="sr-only">Next page</span>
+            </button>
+            <button
+              type="button"
+              class="btn-icon"
+              title="Last page"
+              (click)="worldElementsLastPage()"
+              [disabled]="busy || worldBusy || worldElementsTotalCount === 0 || worldElementsOnLastPage()"
+            >
+              <app-ui-icon name="chevrons-right" />
+              <span class="sr-only">Last page</span>
+            </button>
+          </div>
+          @if (worldElementsTotalCount === 0) {
+            <p>
+              {{
+                worldElementsSearchQuery.trim()
+                  ? 'No world elements match your search.'
+                  : 'No world elements for this book. Add them under Story &amp; World Settings.'
+              }}
+            </p>
+          } @else {
+            @if (worldElementsPage.length === 0) {
+              <p>No entries on this page.</p>
+            } @else {
+              <ul class="world-list">
+                @for (el of worldElementsPage; track el.id) {
+                  <li>
+                    <label>
+                      <input
+                        type="checkbox"
+                        [checked]="isWorldSelected(el.id)"
+                        (change)="toggleWorld(el.id, $event)"
+                        [disabled]="worldBusy"
+                      />
+                      <span class="we-title">{{ el.kind }} — {{ el.title }}</span>
+                      <span class="we-sum">{{ el.summary }}</span>
+                    </label>
+                  </li>
+                }
+              </ul>
+            }
+          }
+          <button type="button" class="btn-with-icon" (click)="saveSceneWorld()" [disabled]="worldBusy">
+            <app-ui-icon name="save" />
+            Save Scene Links
+          </button>
+        </div>
+      </details>
+
+      <details class="panel collapsible" [open]="panelOpen.generate" (toggle)="onPanelToggle('generate', $event)">
+        <summary>
+          <span class="sum-title">Generate Draft</span>
+          <span class="sum-preview">{{ generateSummary }}</span>
+          <span class="panel-sum-actions">
+            <button
+              type="button"
+              class="btn-icon"
+              title="Expand section"
+              (click)="expandPanel('generate', $event)"
+              [disabled]="panelOpen.generate"
+            >
+              <app-ui-icon name="chevron-down" />
+              <span class="sr-only">Expand section</span>
+            </button>
+            <button
+              type="button"
+              class="btn-icon"
+              title="Collapse section"
+              (click)="collapsePanel('generate', $event)"
+              [disabled]="!panelOpen.generate"
+            >
+              <app-ui-icon name="chevron-up" />
+              <span class="sr-only">Collapse section</span>
+            </button>
+          </span>
+        </summary>
+        <div class="collapsible-inner">
+          <p class="hint">
+            Runs the full agentic pipeline (pre-state, draft, agent edits, compliance, quality) then pauses for your review. Target
+            ~1500–2000 words.
+          </p>
+          <div class="generate-actions">
+            <button type="button" class="primary btn-with-icon" (click)="startGeneration()" [disabled]="busy || !selectedSceneId">
+              @if (busy) {
+                Working…
+              } @else {
+                <app-ui-icon name="sparkles" />
+                Generate Draft for Review
+              }
+            </button>
+            @if (generationLogEntries.length > 0) {
+              <button type="button" class="btn-with-icon" (click)="openGenerationLogModal()" title="Open generation log">
+                <app-ui-icon name="clipboard" />
+                View Log ({{ generationLogEntries.length }})
+              </button>
+            }
+            @if (busy && generationRunId && !awaitingReview) {
+              <button
+                type="button"
+                class="btn-with-icon danger"
+                (click)="cancelDraftGeneration()"
+                [title]="fieldHelp.cancelGeneration"
+              >
+                <app-ui-icon name="x" />
+                Cancel generation
+              </button>
+            }
+          </div>
+        </div>
+      </details>
+
+      @if (awaitingReview && generationRunId) {
+        <details class="panel collapsible review-panel" [open]="panelOpen.review" (toggle)="onPanelToggle('review', $event)">
+          <summary>
+            <span class="sum-title">Review Draft</span>
+            <span class="sum-preview">{{ reviewSummary }}</span>
+            <span class="panel-sum-actions">
+              <button
+                type="button"
+                class="btn-icon"
+                title="Expand section"
+                (click)="expandPanel('review', $event)"
+                [disabled]="panelOpen.review"
+              >
+                <app-ui-icon name="chevron-down" />
+                <span class="sr-only">Expand section</span>
+              </button>
+              <button
+                type="button"
+                class="btn-icon"
+                title="Collapse section"
+                (click)="collapsePanel('review', $event)"
+                [disabled]="!panelOpen.review"
+              >
+                <app-ui-icon name="chevron-up" />
+                <span class="sr-only">Collapse section</span>
+              </button>
+            </span>
+          </summary>
+          <div class="collapsible-inner">
+            <p class="hint">Edit the text below, ask the model to correct a section, or finalize to build the end-state narrative table.</p>
+            <label for="draft-body">Draft Text</label>
+            <textarea
+              id="draft-body"
+              class="draft-textarea"
+              rows="18"
+              [(ngModel)]="draftText"
+              [disabled]="busy"
+            ></textarea>
+            <div class="review-actions">
+              <label class="correct-row">
+                Correction Instruction
+                <input
+                  type="text"
+                  [(ngModel)]="correctInstruction"
+                  placeholder="e.g. Sharpen the dialogue in the café beat"
+                  [disabled]="busy"
+                  [title]="fieldHelp.correctInstruction"
+                />
+              </label>
+              <button type="button" class="btn-with-icon" (click)="runCorrect()" [disabled]="busy">
+                <app-ui-icon name="sparkles" />
+                Correct With LLM
+              </button>
+              <button type="button" class="primary btn-with-icon" (click)="finalizeDraft()" [disabled]="busy">
+                <app-ui-icon name="check" />
+                Accept &amp; Finalize (State Table)
+              </button>
+            </div>
+          </div>
+        </details>
+      }
+
+      @if (lastStateTableJson) {
+        <details class="panel collapsible" [open]="panelOpen.endState" (toggle)="onPanelToggle('endState', $event)">
+          <summary>
+            <span class="sum-title">Approved End-State Table (JSON)</span>
+            <span class="sum-preview">{{ endStateSummary }}</span>
+            <span class="panel-sum-actions">
+              <button
+                type="button"
+                class="btn-icon"
+                title="Expand section"
+                (click)="expandPanel('endState', $event)"
+                [disabled]="panelOpen.endState"
+              >
+                <app-ui-icon name="chevron-down" />
+                <span class="sr-only">Expand section</span>
+              </button>
+              <button
+                type="button"
+                class="btn-icon"
+                title="Collapse section"
+                (click)="collapsePanel('endState', $event)"
+                [disabled]="!panelOpen.endState"
+              >
+                <app-ui-icon name="chevron-up" />
+                <span class="sr-only">Collapse section</span>
+              </button>
+            </span>
+          </summary>
+          <div class="collapsible-inner">
+            <p class="hint">Saved when you finalize; the next scene can use the previous scene’s end state as beginning state.</p>
+            <pre class="state-pre">{{ lastStateTableJson }}</pre>
+          </div>
+        </details>
+      }
+    }
   }
 
-  <section class="log" aria-live="polite">
-    <h2>Log</h2>
-    <ul>
-      @for (line of logLines; track $index) {
-        <li>{{ line }}</li>
-      }
-    </ul>
-  </section>
+  @if (suggestModalOpen) {
+    <div class="modal-backdrop" (click)="closeSuggestModal()" aria-hidden="true"></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="suggest-title" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <h2 id="suggest-title">World Elements (From Synopsis)</h2>
+        <button
+          type="button"
+          class="btn-icon modal-close-btn"
+          (click)="closeSuggestModal()"
+          [title]="fieldHelp.suggestModalClose"
+          aria-label="Close"
+        >
+          <app-ui-icon name="x" />
+          <span class="sr-only">Close</span>
+        </button>
+      </div>
+      <p class="hint">Toggle entries, search, then Apply to save links to the scene.</p>
+      <label for="wsearch">Search</label>
+      <input
+        id="wsearch"
+        type="search"
+        [(ngModel)]="modalWorldSearchQuery"
+        (ngModelChange)="onModalWorldSearchInput($event)"
+        [title]="fieldHelp.modalWorldSearch"
+      />
+      <div class="pager modal-world-pager" role="navigation" aria-label="World elements pages">
+        <button
+          type="button"
+          class="btn-icon"
+          title="First page"
+          (click)="modalWorldFirstPage()"
+          [disabled]="modalWorldTotalCount === 0 || modalWorldOnFirstPage()"
+        >
+          <app-ui-icon name="chevrons-left" />
+          <span class="sr-only">First page</span>
+        </button>
+        <button
+          type="button"
+          class="btn-icon"
+          title="Previous page"
+          (click)="modalWorldPrevPage()"
+          [disabled]="modalWorldTotalCount === 0 || modalWorldOnFirstPage()"
+        >
+          <app-ui-icon name="chevron-left" />
+          <span class="sr-only">Previous page</span>
+        </button>
+        <span class="pager-info">{{ modalWorldRangeLabel() }} · 10 per page</span>
+        <button
+          type="button"
+          class="btn-icon"
+          title="Next page"
+          (click)="modalWorldNextPage()"
+          [disabled]="modalWorldTotalCount === 0 || !modalWorldHasNext()"
+        >
+          <app-ui-icon name="chevron-right" />
+          <span class="sr-only">Next page</span>
+        </button>
+        <button
+          type="button"
+          class="btn-icon"
+          title="Last page"
+          (click)="modalWorldLastPage()"
+          [disabled]="modalWorldTotalCount === 0 || modalWorldOnLastPage()"
+        >
+          <app-ui-icon name="chevrons-right" />
+          <span class="sr-only">Last page</span>
+        </button>
+      </div>
+      <div class="modal-scroll">
+        @if (modalWorldTotalCount === 0) {
+          <p>
+            {{
+              modalWorldSearchQuery.trim()
+                ? 'No world elements match your search.'
+                : 'No world elements for this book.'
+            }}
+          </p>
+        } @else if (modalWorldPage.length === 0) {
+          <p>No entries on this page.</p>
+        } @else {
+          <ul class="world-list">
+            @for (el of modalWorldPage; track el.id) {
+              <li>
+                <label>
+                  <input
+                    type="checkbox"
+                    [checked]="modalWorkingIds.has(el.id)"
+                    (change)="toggleModalWorld(el.id, $any($event.target).checked)"
+                  />
+                  <span class="we-title">{{ el.kind }} — {{ el.title }}</span>
+                  <span class="we-sum">{{ el.summary }}</span>
+                </label>
+              </li>
+            }
+          </ul>
+        }
+      </div>
+      <div class="modal-actions">
+        <button type="button" (click)="closeSuggestModal()">Cancel</button>
+        <button type="button" class="primary btn-with-icon" (click)="applySuggestModal()">
+          <app-ui-icon name="save" />
+          Apply &amp; Save Links
+        </button>
+      </div>
+    </div>
+  }
+
+  @if (generationLogModalOpen) {
+    <div class="modal-backdrop" (click)="closeGenerationLogModal()" aria-hidden="true"></div>
+    <div
+      class="modal-panel gen-log-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="gen-log-title"
+      (click)="$event.stopPropagation()"
+    >
+      <div class="modal-header">
+        <h2 id="gen-log-title">Generation Progress</h2>
+        <button type="button" class="btn-icon modal-close-btn" (click)="closeGenerationLogModal()" aria-label="Close">
+          <app-ui-icon name="x" />
+          <span class="sr-only">Close</span>
+        </button>
+      </div>
+      <p class="hint">
+        Live updates from the server: pipeline phases, each LLM call (with response preview and timings), and agent / repair steps.
+      </p>
+      <div
+        class="gen-log-scroll"
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions"
+        aria-sort="descending"
+      >
+        @for (entry of generationLogEntries; track entry.id) {
+          <article [class]="'gen-log-entry kind-' + entry.kind">
+            <div class="gen-log-meta">
+              <span class="gen-log-time">{{ entry.at | date : 'mediumTime' }}</span>
+              <span class="gen-log-badge">{{ entry.eventName }}</span>
+              @if (entry.elapsedMs != null) {
+                <span class="gen-log-elapsed" title="Elapsed since pipeline start">Run {{ formatDuration(entry.elapsedMs) }}</span>
+              }
+              @if (entry.stepDurationMs != null) {
+                <span class="gen-log-step" title="Duration of this step">Step {{ formatDuration(entry.stepDurationMs) }}</span>
+              }
+            </div>
+            <h3 class="gen-log-title-line">{{ entry.title }}</h3>
+            @if (entry.detail) {
+              <p class="gen-log-detail">{{ entry.detail }}</p>
+            }
+            @if (entry.llmRequest) {
+              <div class="gen-log-prompt-row">
+                <details class="gen-log-drill">
+                  <summary class="gen-log-drill-summary">Full prompt (request sent to the model)</summary>
+                  <pre class="gen-log-request">{{ entry.llmRequest }}</pre>
+                </details>
+                <button
+                  type="button"
+                  class="btn-icon gen-log-copy-btn"
+                  (click)="copyGenLogTextToClipboard(entry.llmRequest); $event.stopPropagation()"
+                  [title]="fieldHelp.copyPrompt"
+                  aria-label="Copy full prompt to clipboard"
+                >
+                  <app-ui-icon name="copy" />
+                </button>
+              </div>
+            }
+            @if (entry.llmPreview) {
+              <div class="gen-log-prompt-row">
+                <pre class="gen-log-preview">{{ entry.llmPreview }}</pre>
+                <button
+                  type="button"
+                  class="btn-icon gen-log-copy-btn"
+                  (click)="copyGenLogTextToClipboard(entry.llmPreview); $event.stopPropagation()"
+                  [title]="fieldHelp.copyLlmResponse"
+                  aria-label="Copy LLM response to clipboard"
+                >
+                  <app-ui-icon name="copy" />
+                </button>
+              </div>
+            }
+          </article>
+        }
+      </div>
+      <div class="modal-actions gen-log-modal-actions">
+        @if (busy && generationRunId && !awaitingReview) {
+          <button type="button" class="danger" (click)="cancelDraftGeneration()" [title]="fieldHelp.cancelGeneration">
+            Cancel generation
+          </button>
+        }
+        <button type="button" (click)="closeGenerationLogModal()">Close</button>
+      </div>
+    </div>
+  }
 </section>

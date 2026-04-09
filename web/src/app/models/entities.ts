@@ -19,6 +19,8 @@ export interface MeasurementUnitRow {
 export interface MeasurementMoneyRow {
   name: string;
   definition: string;
+  /** Nation, organization, or regime that issues or backs this currency. */
+  authority?: string;
 }
 
 export interface MeasurementSystemPayload {
@@ -34,10 +36,30 @@ export interface Book {
   title: string;
   storyToneAndStyle?: string;
   contentStyleNotes?: string | null;
+  synopsis?: string | null;
   measurementPreset?: MeasurementPresetValue;
   measurementSystemJson?: string | null;
   createdAt?: string;
   chapters?: Chapter[];
+}
+
+export interface CreatedBookResponse {
+  id: string;
+  title: string;
+}
+
+export interface WorldLinkRow {
+  id: string;
+  fromWorldElementId: string;
+  toWorldElementId: string;
+  fromTitle: string;
+  toTitle: string;
+  relationLabel: string;
+}
+
+export interface WorldLinksPage {
+  totalCount: number;
+  items: WorldLinkRow[];
 }
 
 export interface Chapter {
@@ -45,6 +67,7 @@ export interface Chapter {
   bookId: string;
   order: number;
   title: string;
+  isComplete?: boolean;
   scenes?: Scene[];
 }
 
@@ -53,13 +76,46 @@ export interface Scene {
   chapterId: string;
   order: number;
   title: string;
+  synopsis?: string;
   instructions: string;
+  narrativePerspective?: string | null;
+  narrativeTense?: string | null;
+  beginningStateJson?: string | null;
+  approvedStateTableJson?: string | null;
   expectedEndStateNotes?: string | null;
   latestDraftText?: string | null;
 }
 
+/** API enum: 0 Scene, 1 WorldEvent */
+export type TimelineEntryKindValue = 0 | 1;
+
+export interface TimelineEntry {
+  id: string;
+  bookId: string;
+  kind: TimelineEntryKindValue;
+  sortKey: number;
+  sceneId?: string | null;
+  title: string;
+  summary?: string | null;
+  worldElementId?: string | null;
+  scene?: Scene | null;
+  worldElement?: Pick<WorldElement, 'id' | 'title' | 'kind'> | null;
+  /** Exchange pair at this story-time beat. */
+  currencyPairBase?: string | null;
+  currencyPairQuote?: string | null;
+  currencyPairAuthority?: string | null;
+  currencyPairExchangeNote?: string | null;
+}
+
 export interface ODataCollection<T> {
   value: T[];
+  /** Present when the request included `$count=true`. */
+  '@odata.count'?: number;
+}
+
+export interface ODataPagedResult<T> {
+  value: T[];
+  count?: number;
 }
 
 export interface WorldElement {
@@ -81,7 +137,66 @@ export interface SceneWorldElementRow {
   worldElementId: string;
 }
 
+/** LLM-suggested link, resolved to element IDs (not created until user applies). */
+export interface WorldBuildingSuggestedLink {
+  fromWorldElementId: string;
+  toWorldElementId: string;
+  fromTitle: string;
+  toTitle: string;
+  relationLabel: string;
+}
+
 export interface WorldBuildingApplyResult {
   createdElementIds: string[];
-  createdLinkIds: string[];
+  /** @deprecated Links are no longer auto-created; use suggestedLinks. */
+  createdLinkIds?: string[];
+  suggestedLinks?: WorldBuildingSuggestedLink[];
+}
+
+export interface ApplySuggestedLinksResponse {
+  createdCount: number;
+}
+
+/** LLM canon review for one world element: links + timeline attachments. */
+export interface LinkCanonReviewProposal {
+  id: string;
+  kind: string;
+  rationale: string;
+  fromTitle?: string | null;
+  toTitle?: string | null;
+  relationLabel?: string | null;
+  fromWorldElementId?: string | null;
+  toWorldElementId?: string | null;
+  linkId?: string | null;
+  currentRelationLabel?: string | null;
+  newRelationLabel?: string | null;
+  timelineEntryId?: string | null;
+  timelineEntryTitle?: string | null;
+  currentWorldElementTitle?: string | null;
+  proposedWorldElementTitle?: string | null;
+  proposedWorldElementId?: string | null;
+  clearWorldElementLink?: boolean;
+}
+
+export interface LinkCanonReviewResult {
+  proposals: LinkCanonReviewProposal[];
+}
+
+export interface ApplyLinkCanonItem {
+  kind: string;
+  fromWorldElementId?: string | null;
+  toWorldElementId?: string | null;
+  relationLabel?: string | null;
+  linkId?: string | null;
+  newRelationLabel?: string | null;
+  timelineEntryId?: string | null;
+  worldElementId?: string | null;
+  clearWorldElementId: boolean;
+}
+
+export interface LinkCanonApplyResult {
+  linksAdded: number;
+  linksRemoved: number;
+  relationsUpdated: number;
+  timelineEntriesUpdated: number;
 }

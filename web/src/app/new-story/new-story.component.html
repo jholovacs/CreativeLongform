@@ -1,0 +1,53 @@
+<section class="new-story">
+  <p class="back"><a routerLink="/">← Stories</a></p>
+  <h1>New story</h1>
+  <p class="lede">
+    Add basics, optionally paste or import text, then create the book. We can generate world-building entries and
+    characters from your input (requires Ollama).
+  </p>
+
+  @if (error) {
+    <p class="error">{{ error }}</p>
+  }
+
+  <form (ngSubmit)="submit()" class="form">
+    <label for="title">Title <span class="req">*</span></label>
+    <input id="title" name="title" [(ngModel)]="title" required [disabled]="busy" />
+
+    <label for="tone">Tone</label>
+    <textarea id="tone" name="tone" rows="2" [(ngModel)]="tone" [disabled]="busy" placeholder="e.g. hopeful literary SF"></textarea>
+
+    <label for="style">Style notes</label>
+    <textarea id="style" name="style" rows="2" [(ngModel)]="styleNotes" [disabled]="busy" placeholder="POV, tense, dialogue style…"></textarea>
+
+    <label for="syn">Synopsis</label>
+    <textarea id="syn" name="syn" rows="5" [(ngModel)]="synopsis" [disabled]="busy" placeholder="What happens in this story?"></textarea>
+
+    <label for="paste">Paste supporting text (optional)</label>
+    <textarea
+      id="paste"
+      name="paste"
+      rows="8"
+      [(ngModel)]="sourceText"
+      [disabled]="busy"
+      placeholder="Outline, notes, or draft prose…"
+    ></textarea>
+
+    <div class="file-row">
+      <label for="file">Or import a .txt file</label>
+      <input id="file" type="file" accept=".txt,text/plain" (change)="onFileSelected($event)" [disabled]="busy" />
+      @if (importedFileName) {
+        <span class="fname">{{ importedFileName }}</span>
+      }
+    </div>
+
+    <label class="check">
+      <input type="checkbox" [(ngModel)]="generateWorld" name="gen" [disabled]="busy" />
+      Generate world-building &amp; characters after create
+    </label>
+
+    <div class="submit-row">
+      <button type="submit" class="primary" [disabled]="busy">Create story</button>
+    </div>
+  </form>
+</section>

@@ -60,6 +60,7 @@ public class AgenticEditLoopTests
             (_, _, _) => Task.FromResult(("""{"action":"finish","reason":"ok"}""", "")),
             new NoopNotifier(),
             Guid.NewGuid(),
+            () => 0L,
             CancellationToken.None);
 
         Assert.Equal(draft.Replace("\r\n", "\n", StringComparison.Ordinal), result.Replace("\r\n", "\n", StringComparison.Ordinal));
@@ -87,6 +88,7 @@ public class AgenticEditLoopTests
             },
             new NoopNotifier(),
             Guid.NewGuid(),
+            () => 0L,
             CancellationToken.None);
 
         Assert.Contains("New.", result, StringComparison.Ordinal);
@@ -97,7 +99,8 @@ public class AgenticEditLoopTests
     private sealed class NoopNotifier : IGenerationProgressNotifier
     {
         public Task NotifyAsync(Guid generationRunId, string eventName, string? step, string? detail,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default, long? elapsedMsSinceRunStart = null,
+            long? stepDurationMs = null, string? llmResponsePreview = null, string? llmRequestPayload = null) =>
             Task.CompletedTask;
     }
 }

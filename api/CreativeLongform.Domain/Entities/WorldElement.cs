@@ -20,4 +20,5 @@ public class WorldElement
     public ICollection<SceneWorldElement> SceneWorldElements { get; set; } = new List<SceneWorldElement>();
     public ICollection<WorldElementLink> OutgoingLinks { get; set; } = new List<WorldElementLink>();
     public ICollection<WorldElementLink> IncomingLinks { get; set; } = new List<WorldElementLink>();
+    public ICollection<TimelineEntry> TimelineEntries { get; set; } = new List<TimelineEntry>();
 }

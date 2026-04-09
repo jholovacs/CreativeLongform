@@ -34,6 +34,8 @@ public sealed class BookStoryController : ControllerBase
             book.MeasurementPreset = body.MeasurementPreset.Value;
         if (body.MeasurementSystemJson is not null)
             book.MeasurementSystemJson = body.MeasurementSystemJson;
+        if (body.Synopsis is not null)
+            book.Synopsis = body.Synopsis;
 
         await _db.SaveChangesAsync(cancellationToken);
         return NoContent();
@@ -45,5 +47,6 @@ public sealed class BookStoryController : ControllerBase
         public string? ContentStyleNotes { get; set; }
         public MeasurementPreset? MeasurementPreset { get; set; }
         public string? MeasurementSystemJson { get; set; }
+        public string? Synopsis { get; set; }
     }
 }

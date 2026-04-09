@@ -41,6 +41,8 @@ services:
       DisableHttpsRedirection: "true"
       ConnectionStrings__Default: "Host=postgres;Port=5432;Database=creativelongform;Username=creative;Password=creative"
       Ollama__BaseUrl: "http://ollama:11434/api"
+      Ollama__WriterModel: "${OLLAMA_MODEL:-llama3.2}"
+      Ollama__CriticModel: "${OLLAMA_MODEL:-llama3.2}"
     ports:
       - "5094:8080"
     restart: unless-stopped
