@@ -100,7 +100,13 @@ export const BOOK_WORLD_FIELD_HELP = {
     'Draft = work in progress; Canon = established for the story. Example: Canon once reviewed.',
 
   linksSearch:
-    'Search by from-title, to-title, or relation label (server-side). Example: located',
+    'Server-side: matches text in either endpoint’s title, summary, or detail, plus relation label and relationship detail. Example: Mara or located',
+  linksElementFilter:
+    'Show only links where this world element is the source (From) or target (To). Example: pick your protagonist to see every link they participate in.',
+  linksSort:
+    'Order the table: by relation label, From title, To title, or relationship detail text.',
+  linksSortDesc:
+    'When checked, sort descending (Z→A, empty detail last when sorting by detail).',
 
   linkFrom:
     'Source world element of the directed relation. Example: Character: Captain Mara',
@@ -108,6 +114,10 @@ export const BOOK_WORLD_FIELD_HELP = {
     'Target world element. Example: Geography: Ironport docks',
   linkLabel:
     'Relation in plain language (stored as relation label). Example: Located in or Reports to',
+  linkRelationDetail:
+    'Optional nuance for this relationship (included in generation prompts only when both entries are linked to the scene). Example: She avoids the east pier after the riot.',
+  linkDetailEdit:
+    'Edit the relation label and optional relationship detail. Detail is used in scene generation only when both linked elements are attached to that scene.',
 
   suggestedLinkCheckbox:
     'Include this suggested link when you create selected links. Uncheck to skip this pair.'

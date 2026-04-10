@@ -115,6 +115,7 @@ public sealed class CreativeLongformDbContext : DbContext, ICreativeLongformDbCo
             e.Property(x => x.NarrativeTense).HasMaxLength(64);
             e.Property(x => x.BeginningStateJson).HasColumnType("jsonb");
             e.Property(x => x.ApprovedStateTableJson).HasColumnType("jsonb");
+            e.Property(x => x.PendingPostStateJson).HasColumnType("jsonb");
             e.Property(x => x.ExpectedEndStateNotes).HasMaxLength(8000);
             e.Property(x => x.LatestDraftText).HasColumnType("text");
             e.HasOne(x => x.Chapter).WithMany(x => x.Scenes).HasForeignKey(x => x.ChapterId).OnDelete(DeleteBehavior.Cascade);
@@ -127,6 +128,8 @@ public sealed class CreativeLongformDbContext : DbContext, ICreativeLongformDbCo
             e.Property(x => x.IdempotencyKey).HasMaxLength(128);
             e.Property(x => x.FailureReason).HasMaxLength(8000);
             e.Property(x => x.StopAfterDraft).HasDefaultValue(false);
+            e.Property(x => x.QualityAcceptMinScore).HasDefaultValue(75);
+            e.Property(x => x.QualityReviewOnlyMinScore).HasDefaultValue(55);
             e.Property(x => x.FinalDraftText).HasColumnType("text");
             e.HasOne(x => x.Scene).WithMany(x => x.GenerationRuns).HasForeignKey(x => x.SceneId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(x => new { x.SceneId, x.IdempotencyKey });
@@ -172,6 +175,7 @@ public sealed class CreativeLongformDbContext : DbContext, ICreativeLongformDbCo
         {
             e.HasKey(x => x.Id);
             e.Property(x => x.RelationLabel).HasMaxLength(128);
+            e.Property(x => x.RelationDetail).HasMaxLength(4000);
             e.HasOne(x => x.FromWorldElement).WithMany(x => x.OutgoingLinks).HasForeignKey(x => x.FromWorldElementId)
                 .OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.ToWorldElement).WithMany(x => x.IncomingLinks).HasForeignKey(x => x.ToWorldElementId)

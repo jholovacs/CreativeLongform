@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using CreativeLongform.Application.Abstractions;
@@ -49,11 +50,31 @@ public sealed class OllamaClient : IOllamaClient
             payload["options"] = new Dictionary<string, object?> { ["num_predict"] = n };
 
         using var response = await _http.PostAsJsonAsync("chat", payload, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            var hint =
+                $"Ollama returned 404 for model '{model}'. Pull it (e.g. docker compose exec ollama ollama pull {model}) " +
+                "or set Ollama__WriterModel / Ollama__CriticModel and OLLAMA_MODEL to a tag that exists (see ollama list in the container).";
+            throw new InvalidOperationException(hint);
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var errBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new HttpRequestException(
+                $"Ollama chat failed: {(int)response.StatusCode} {response.ReasonPhrase}. {Truncate(errBody, 500)}");
+        }
+
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
         var root = doc.RootElement;
         var content = root.GetProperty("message").GetProperty("content").GetString() ?? string.Empty;
         return new OllamaChatResult(model, content);
+    }
+
+    private static string Truncate(string s, int max)
+    {
+        if (string.IsNullOrEmpty(s) || s.Length <= max) return s;
+        return s[..max] + "…";
     }
 }

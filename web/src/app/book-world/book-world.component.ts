@@ -1,4 +1,5 @@
 import { CommonModule } from '@angular/common';
+import { HttpErrorResponse } from '@angular/common/http';
 import { Component, HostListener, OnDestroy, OnInit, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
@@ -102,6 +103,11 @@ export class BookWorldComponent implements OnInit, OnDestroy {
   linksSkip = 0;
   readonly linksPageSize = 10;
   linksSearchQuery = '';
+  /** Empty = all links; otherwise only links where this element is From or To. */
+  linksWorldElementFilterId = '';
+  /** API: relation | from | to | detail */
+  linksSortKey: 'relation' | 'from' | 'to' | 'detail' = 'relation';
+  linksSortDesc = false;
 
   tone = '';
   contentNotes = '';
@@ -129,6 +135,12 @@ export class BookWorldComponent implements OnInit, OnDestroy {
   linkFromId = '';
   linkToId = '';
   linkLabel = '';
+  linkRelationDetail = '';
+
+  linkDetailModalOpen = false;
+  linkDetailPatchId: string | null = null;
+  linkDetailPatchLabel = '';
+  linkDetailPatchText = '';
 
   newTimelineTitle = '';
   newTimelineSummary = '';
@@ -167,6 +179,10 @@ export class BookWorldComponent implements OnInit, OnDestroy {
   suggestedLinksAccepted: boolean[] = [];
   /** Editable relation label per row (parallel to suggestedLinks). */
   suggestedLinkRelationDrafts: string[] = [];
+  /** Editable from/to element ids (parallel to suggestedLinks). */
+  suggestedLinkFromIdDrafts: string[] = [];
+  suggestedLinkToIdDrafts: string[] = [];
+  suggestedLinkDetailDrafts: string[] = [];
   suggestModalBusy = false;
 
   /** Shown while the suggest-links LLM call runs after save/create. */
@@ -214,6 +230,9 @@ export class BookWorldComponent implements OnInit, OnDestroy {
         this.elementsSkip = 0;
         this.timelineSkip = 0;
         this.linksSkip = 0;
+        this.linksWorldElementFilterId = '';
+        this.linksSortKey = 'relation';
+        this.linksSortDesc = false;
         this.unitsSkip = 0;
         this.moneySkip = 0;
         this.error = null;
@@ -223,6 +242,9 @@ export class BookWorldComponent implements OnInit, OnDestroy {
         this.suggestedLinks = [];
         this.suggestedLinksAccepted = [];
         this.suggestedLinkRelationDrafts = [];
+        this.suggestedLinkFromIdDrafts = [];
+        this.suggestedLinkToIdDrafts = [];
+        this.suggestedLinkDetailDrafts = [];
         this.linkCanonModalOpen = false;
         this.linkCanonRows = [];
         this.linkCanonFocusTitle = '';
@@ -332,6 +354,11 @@ export class BookWorldComponent implements OnInit, OnDestroy {
 
   onLinksSearchInput(value: string): void {
     this.linksSearch$.next(value);
+  }
+
+  onLinksFilterOrSortChange(): void {
+    this.linksSkip = 0;
+    this.loadLinksPage();
   }
 
   onUnitsSearchInput(value: string): void {
@@ -714,7 +741,11 @@ export class BookWorldComponent implements OnInit, OnDestroy {
   get linksSummary(): string {
     const n = this.linksTotalCount;
     const q = this.linksSearchQuery.trim();
-    if (q) return `${n} link matches for “${this.truncate(q, 40)}”`;
+    const wid = this.linksWorldElementFilterId.trim();
+    const el = wid ? this.pickerElements.find((e) => e.id === wid) : null;
+    const involving = el ? ` · ${el.title}` : '';
+    if (q) return `${n} link matches for “${this.truncate(q, 40)}”${involving}`;
+    if (el) return `${n} link${n === 1 ? '' : 's'} involving ${el.title}`;
     return `${n} ${n === 1 ? 'link' : 'links'}`;
   }
 
@@ -943,7 +974,10 @@ export class BookWorldComponent implements OnInit, OnDestroy {
       .getWorldLinksPaged(this.bookId, {
         skip: this.linksSkip,
         top: this.linksPageSize,
-        search: this.linksSearchQuery.trim() || undefined
+        search: this.linksSearchQuery.trim() || undefined,
+        worldElementId: this.linksWorldElementFilterId.trim() || undefined,
+        sortBy: this.linksSortKey,
+        sortDesc: this.linksSortDesc
       })
       .subscribe({
         next: (res) => {
@@ -1102,6 +1136,9 @@ export class BookWorldComponent implements OnInit, OnDestroy {
     this.suggestedLinks = links;
     this.suggestedLinksAccepted = links.map(() => true);
     this.suggestedLinkRelationDrafts = links.map((l) => l.relationLabel ?? '');
+    this.suggestedLinkFromIdDrafts = links.map((l) => l.fromWorldElementId);
+    this.suggestedLinkToIdDrafts = links.map((l) => l.toWorldElementId);
+    this.suggestedLinkDetailDrafts = links.map(() => '');
     this.linkSuggestionModalOpen = true;
   }
 
@@ -1110,6 +1147,9 @@ export class BookWorldComponent implements OnInit, OnDestroy {
     this.suggestedLinks = [];
     this.suggestedLinksAccepted = [];
     this.suggestedLinkRelationDrafts = [];
+    this.suggestedLinkFromIdDrafts = [];
+    this.suggestedLinkToIdDrafts = [];
+    this.suggestedLinkDetailDrafts = [];
   }
 
   toggleSuggestedLink(index: number): void {
@@ -1127,13 +1167,28 @@ export class BookWorldComponent implements OnInit, OnDestroy {
   }
 
   applySuggestedLinksFromModal(): void {
-    const toCreate = this.suggestedLinks
-      .map((link, i) => {
-        const draft = this.suggestedLinkRelationDrafts[i]?.trim();
-        const rel = (draft || link.relationLabel || '').trim();
-        return { ...link, relationLabel: rel };
-      })
-      .filter((_, i) => this.suggestedLinksAccepted[i]);
+    const toCreate: WorldBuildingSuggestedLink[] = [];
+    for (let i = 0; i < this.suggestedLinks.length; i++) {
+      if (!this.suggestedLinksAccepted[i]) continue;
+      const link = this.suggestedLinks[i];
+      const fromId = (this.suggestedLinkFromIdDrafts[i] ?? link.fromWorldElementId).trim();
+      const toId = (this.suggestedLinkToIdDrafts[i] ?? link.toWorldElementId).trim();
+      const relDraft = this.suggestedLinkRelationDrafts[i]?.trim();
+      const rel = (relDraft || link.relationLabel || '').trim();
+      const detailRaw = this.suggestedLinkDetailDrafts[i]?.trim() ?? '';
+      if (!fromId || !toId || fromId === toId || !rel) {
+        this.error =
+          'Each selected link needs two different world elements and a relationship label.';
+        return;
+      }
+      toCreate.push({
+        ...link,
+        fromWorldElementId: fromId,
+        toWorldElementId: toId,
+        relationLabel: rel,
+        relationDetail: detailRaw || null
+      });
+    }
     if (toCreate.length === 0) {
       this.closeSuggestedLinksModal();
       return;
@@ -1441,16 +1496,19 @@ export class BookWorldComponent implements OnInit, OnDestroy {
     }
     this.busy = true;
     this.error = null;
+    const detail = this.linkRelationDetail.trim();
     this.world
       .createWorldLink(this.bookId, {
         fromWorldElementId: this.linkFromId,
         toWorldElementId: this.linkToId,
-        relationLabel: this.linkLabel.trim()
+        relationLabel: this.linkLabel.trim(),
+        relationDetail: detail ? detail : null
       })
       .subscribe({
         next: () => {
           this.busy = false;
           this.linkLabel = '';
+          this.linkRelationDetail = '';
           this.load();
         },
         error: (e) => {
@@ -1458,6 +1516,70 @@ export class BookWorldComponent implements OnInit, OnDestroy {
           this.busy = false;
         }
       });
+  }
+
+  linkDetailCell(d: string | null | undefined): string {
+    const t = d?.trim() ?? '';
+    if (!t) return '—';
+    return this.truncate(t, 72);
+  }
+
+  openLinkDetailModal(row: WorldLinkRow): void {
+    this.linkDetailPatchId = row.id;
+    this.linkDetailPatchLabel = row.relationLabel?.trim() ?? '';
+    this.linkDetailPatchText = row.relationDetail?.trim() ?? '';
+    this.linkDetailModalOpen = true;
+    this.error = null;
+  }
+
+  closeLinkDetailModal(): void {
+    this.linkDetailModalOpen = false;
+    this.linkDetailPatchId = null;
+    this.linkDetailPatchLabel = '';
+    this.linkDetailPatchText = '';
+  }
+
+  saveLinkDetail(): void {
+    if (!this.linkDetailPatchId) return;
+    const label = this.linkDetailPatchLabel.trim();
+    if (!label) {
+      this.error = 'Relation label is required.';
+      return;
+    }
+    if (label.length > 128) {
+      this.error = 'Relation label must be at most 128 characters.';
+      return;
+    }
+    const text = this.linkDetailPatchText.trim();
+    const detailPayload = text.length === 0 ? null : text;
+    if (detailPayload !== null && detailPayload.length > 4000) {
+      this.error = 'Relationship detail must be at most 4000 characters.';
+      return;
+    }
+    this.busy = true;
+    this.error = null;
+    this.world.patchWorldLink(this.linkDetailPatchId, {
+      relationLabel: label,
+      relationDetail: detailPayload
+    }).subscribe({
+      next: () => {
+        this.busy = false;
+        this.closeLinkDetailModal();
+        this.loadLinksPage();
+      },
+      error: (e: HttpErrorResponse) => {
+        if (e.status === 409) {
+          this.error =
+            'A link with the same endpoints and label may already exist.';
+        } else {
+          this.error =
+            typeof e.error === 'string'
+              ? e.error
+              : (e.error?.message ?? e.message ?? 'Could not save link');
+        }
+        this.busy = false;
+      }
+    });
   }
 
   downloadGlossary(): void {

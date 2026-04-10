@@ -68,7 +68,8 @@ export class WorldService {
         links: links.map((l) => ({
           fromWorldElementId: l.fromWorldElementId,
           toWorldElementId: l.toWorldElementId,
-          relationLabel: l.relationLabel
+          relationLabel: l.relationLabel,
+          relationDetail: l.relationDetail?.trim() ? l.relationDetail.trim() : null
         }))
       }
     );
@@ -207,10 +208,26 @@ export class WorldService {
       );
   }
 
-  getWorldLinksPaged(bookId: string, opts: { skip: number; top: number; search?: string }) {
-    let params = new HttpParams().set('skip', String(opts.skip)).set('take', String(opts.top));
+  getWorldLinksPaged(
+    bookId: string,
+    opts: {
+      skip: number;
+      top: number;
+      search?: string;
+      worldElementId?: string;
+      sortBy?: string;
+      sortDesc?: boolean;
+    }
+  ) {
+    let params = new HttpParams()
+      .set('skip', String(opts.skip))
+      .set('take', String(opts.top))
+      .set('sortBy', opts.sortBy ?? 'relation')
+      .set('sortDesc', String(opts.sortDesc ?? false));
     const q = opts.search?.trim();
     if (q) params = params.set('search', q);
+    const wid = opts.worldElementId?.trim();
+    if (wid) params = params.set('worldElementId', wid);
     return this.http.get<WorldLinksPage>(`${apiBaseUrl}/api/books/${bookId}/world/links`, { params });
   }
 
@@ -248,9 +265,21 @@ export class WorldService {
 
   createWorldLink(
     bookId: string,
-    body: { fromWorldElementId: string; toWorldElementId: string; relationLabel: string }
+    body: {
+      fromWorldElementId: string;
+      toWorldElementId: string;
+      relationLabel: string;
+      relationDetail?: string | null;
+    }
   ) {
     return this.http.post<{ id: string }>(`${apiBaseUrl}/api/books/${bookId}/world/links`, body);
+  }
+
+  patchWorldLink(
+    linkId: string,
+    body: { relationLabel: string; relationDetail: string | null }
+  ) {
+    return this.http.patch<void>(`${apiBaseUrl}/api/world-element-links/${linkId}`, body);
   }
 
   deleteWorldLink(linkId: string) {

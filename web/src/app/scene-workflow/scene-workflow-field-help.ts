@@ -22,7 +22,7 @@ export const SCENE_WORKFLOW_FIELD_HELP = {
     'Verb tense for the prose. Example: past, present. Defaults from earlier scenes when left blank on open.',
 
   beginningStateJson:
-    'JSON snapshot of story/world state at scene start. Empty uses the previous scene’s approved end-state when available. Example: {"location":"Harbor"}',
+    'JSON continuity snapshot at scene start (environment.setting, spatial layout/proximity, characters with pose, clothing, emotionalState, relativeToOthers, topOfMind, etc.). Empty uses the previous scene’s approved end-state when available.',
 
   worldElementsSearch:
     'Server-side filter: title, kind, summary, or detail (case-insensitive). Example: harbor or Character.',
@@ -30,14 +30,19 @@ export const SCENE_WORKFLOW_FIELD_HELP = {
     'Server-side filter for this list: title, kind, summary, or detail (case-insensitive).',
 
   correctInstruction:
-    'Tell the model what to change in the draft. Example: Tighten the café dialogue; keep the rain motif.',
+    'Tell the model what to change. With text selected in the draft, only that passage is rewritten; the full draft and scene/world context are still sent. With no selection, the whole draft is revised.',
 
   suggestModalClose: 'Close without applying changes.',
 
   cancelGeneration:
     'Stop this draft run after the current LLM step. Use if the model is going in the wrong direction; you can generate again.',
 
+  qualityAcceptMinScore:
+    'Critic score 0–100. At or above this, the pipeline accepts the draft without an automated quality repair pass. Default 75.',
+  qualityReviewOnlyMinScore:
+    'Minimum score to pass. Between this and “no repair” above, the run still passes but issues are listed for your manual review. Default 55.',
+
   copyPrompt: 'Copy the full request payload (prompt) sent to the model to the clipboard.',
 
-  copyLlmResponse: 'Copy the LLM response text (truncated preview from the server) to the clipboard.'
+  copyLlmResponse: 'Copy the full LLM response text to the clipboard.'
 };

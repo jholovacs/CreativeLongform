@@ -70,6 +70,7 @@ public sealed class ApplySuggestedLinkItem
     public Guid FromWorldElementId { get; set; }
     public Guid ToWorldElementId { get; set; }
     public string RelationLabel { get; set; } = string.Empty;
+    public string? RelationDetail { get; set; }
 }
 
 public sealed class LinkCanonReviewResult

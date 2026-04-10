@@ -45,15 +45,25 @@ services:
       Ollama__CriticModel: "${OLLAMA_MODEL:-llama3.2}"
     ports:
       - "5094:8080"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/8080"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 90s
     restart: unless-stopped
 
   web:
     build:
-      context: .
-      dockerfile: web/Dockerfile
+      context: web
+      dockerfile: Dockerfile
     container_name: creative-longform-web
+    # Use service_started (not service_healthy): otherwise `docker compose up` can block until the API passes its
+    # healthcheck. A slow first migration, a flaky TCP check, or bash missing in the image would prevent `web` from
+    # ever starting and make `make deploy` look hung. Nginx may briefly return 502 until the API is listening.
     depends_on:
-      - api
+      api:
+        condition: service_started
     ports:
       - "8080:80"
     restart: unless-stopped

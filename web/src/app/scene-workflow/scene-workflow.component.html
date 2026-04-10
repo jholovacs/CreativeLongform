@@ -247,7 +247,8 @@
         <div class="collapsible-inner">
           <p class="hint">
             If there is a previous scene with a finalized run, the prior end-state is suggested. Override with your own JSON if
-            needed.
+            needed. The table tracks place, environment, spatial layout, who is on stage, pose, dress, mood, relative positions,
+            and salient topics for the next scene.
           </p>
           <label for="begin-json">Beginning State JSON</label>
           <textarea
@@ -297,7 +298,10 @@
           </span>
         </summary>
         <div class="collapsible-inner">
-          <p class="hint">Suggested by the LLM from your synopsis; adjust before generation.</p>
+          <p class="hint">
+            Suggested by the LLM from your synopsis; adjust before generation. Generate Draft saves your checks to the server
+            first; use Save Scene Links if you want to persist without generating.
+          </p>
           <div class="we-toolbar world-elements-toolbar">
             <div class="world-elements-search">
               <label for="we-search">Search</label>
@@ -435,8 +439,36 @@
         <div class="collapsible-inner">
           <p class="hint">
             Runs the full agentic pipeline (pre-state, draft, agent edits, compliance, quality) then pauses for your review. Target
-            ~1500–2000 words.
+            ~1500–2000 words. When you generate, your current World Elements for This Scene checkboxes are saved first, then the
+            model receives a &quot;Linked world-building&quot; section (titles, summaries, and relationship lines between linked
+            pairs) or an explicit note when none are checked.
           </p>
+          <div class="quality-thresholds">
+            <label class="quality-label" for="qa-accept">Quality: no automated repair at score ≥</label>
+            <input
+              id="qa-accept"
+              type="number"
+              min="0"
+              max="100"
+              step="1"
+              [(ngModel)]="qualityAcceptMinScore"
+              (ngModelChange)="onQualityThresholdsChange()"
+              [disabled]="busy"
+              [title]="fieldHelp.qualityAcceptMinScore"
+            />
+            <label class="quality-label" for="qa-review">Minimum pass score</label>
+            <input
+              id="qa-review"
+              type="number"
+              min="0"
+              max="100"
+              step="1"
+              [(ngModel)]="qualityReviewOnlyMinScore"
+              (ngModelChange)="onQualityThresholdsChange()"
+              [disabled]="busy"
+              [title]="fieldHelp.qualityReviewOnlyMinScore"
+            />
+          </div>
           <div class="generate-actions">
             <button type="button" class="primary btn-with-icon" (click)="startGeneration()" [disabled]="busy || !selectedSceneId">
               @if (busy) {
@@ -496,14 +528,19 @@
             </span>
           </summary>
           <div class="collapsible-inner">
-            <p class="hint">Edit the text below, ask the model to correct a section, or finalize to build the end-state narrative table.</p>
+            <p class="hint">
+              Edit the text below, ask the model to correct a section, or finalize to build the end-state narrative table. With text
+              selected, the correction applies only to that selection (the full draft is still sent for context).
+            </p>
             <label for="draft-body">Draft Text</label>
             <textarea
+              #draftBody
               id="draft-body"
               class="draft-textarea"
               rows="18"
               [(ngModel)]="draftText"
               [disabled]="busy"
+              (blur)="onDraftBlur()"
             ></textarea>
             <div class="review-actions">
               <label class="correct-row">
@@ -532,7 +569,7 @@
       @if (lastStateTableJson) {
         <details class="panel collapsible" [open]="panelOpen.endState" (toggle)="onPanelToggle('endState', $event)">
           <summary>
-            <span class="sum-title">Approved End-State Table (JSON)</span>
+            <span class="sum-title">End-State Table (JSON)</span>
             <span class="sum-preview">{{ endStateSummary }}</span>
             <span class="panel-sum-actions">
               <button
@@ -558,7 +595,9 @@
             </span>
           </summary>
           <div class="collapsible-inner">
-            <p class="hint">Saved when you finalize; the next scene can use the previous scene’s end state as beginning state.</p>
+            <p class="hint">
+              After generate, this shows the draft-derived table (pending). When you finalize, it becomes the approved end state the next scene can use as beginning state.
+            </p>
             <pre class="state-pre">{{ lastStateTableJson }}</pre>
           </div>
         </details>
@@ -734,7 +773,10 @@
             }
             @if (entry.llmPreview) {
               <div class="gen-log-prompt-row">
-                <pre class="gen-log-preview">{{ entry.llmPreview }}</pre>
+                <details class="gen-log-drill">
+                  <summary class="gen-log-drill-summary">Full LLM response</summary>
+                  <pre class="gen-log-request">{{ entry.llmPreview }}</pre>
+                </details>
                 <button
                   type="button"
                   class="btn-icon gen-log-copy-btn"

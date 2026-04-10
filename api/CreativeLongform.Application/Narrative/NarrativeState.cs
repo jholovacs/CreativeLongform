@@ -41,6 +41,7 @@ public sealed class CharacterState
     [JsonPropertyName("location")]
     public string? Location { get; set; }
 
+    /// <summary>Body posture / stance / gesture — concrete, continuity-safe.</summary>
     [JsonPropertyName("pose")]
     public string? Pose { get; set; }
 
@@ -50,15 +51,25 @@ public sealed class CharacterState
     [JsonPropertyName("emotionalState")]
     public string? EmotionalState { get; set; }
 
+    /// <summary>How this character is positioned relative to others on stage (distance, facing, blocking).</summary>
+    [JsonPropertyName("relativeToOthers")]
+    public string? RelativeToOthers { get; set; }
+
+    /// <summary>Topics, worries, goals, or activities likely to stay salient into the next scene.</summary>
+    [JsonPropertyName("topOfMind")]
+    public List<string> TopOfMind { get; set; } = new();
+
     [JsonPropertyName("traitsShownNotTold")]
     public List<string> TraitsShownNotTold { get; set; } = new();
 }
 
 public sealed class SpatialState
 {
+    /// <summary>Room or area layout, exits, furniture, sightlines — what a camera would see.</summary>
     [JsonPropertyName("layout")]
     public string? Layout { get; set; }
 
+    /// <summary>Who is near whom, distances, obstacles — continuity for blocking.</summary>
     [JsonPropertyName("proximity")]
     public string? Proximity { get; set; }
 }
@@ -83,6 +94,10 @@ public sealed class KnowledgeState
 
 public sealed class EnvironmentState
 {
+    /// <summary>Immediate place (room, street, vehicle interior, etc.).</summary>
+    [JsonPropertyName("setting")]
+    public string? Setting { get; set; }
+
     [JsonPropertyName("timeOfDay")]
     public string? TimeOfDay { get; set; }
 

@@ -24,7 +24,10 @@ describe('GenerationService', () => {
     expect(req.request.body).toEqual({
       idempotencyKey: 'key-1',
       stopAfterDraft: false,
-      minWordsOverride: null
+      minWordsOverride: null,
+      skipQualityGate: false,
+      qualityAcceptMinScore: null,
+      qualityReviewOnlyMinScore: null
     });
     req.flush({ id: 'run-id' });
   });

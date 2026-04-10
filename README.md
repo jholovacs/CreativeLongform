@@ -13,13 +13,13 @@ Everything can run in Docker: Postgres, Ollama, the API, and **nginx** serving t
 
 ### Full stack
 
-**First-time or fresh deploy (recommended):** interactive Ollama CPU vs GPU (when NVIDIA is available), model choice, then build and start everything:
+**First-time or fresh deploy (recommended):** interactive Ollama CPU vs GPU (when an NVIDIA GPU is detected, **GPU is the default**; press Enter to accept), model choice, then build and start everything:
 
 ```bash
 make setup
 ```
 
-This writes a local `.env` with `OLLAMA_MODEL` (used for `Ollama__WriterModel` / `Ollama__CriticModel` in Compose) and, if you choose GPU, a gitignored `docker-compose.override.yml` that adds `gpus: all` to the Ollama service. It runs `docker compose up -d --build` and pulls the selected model into the Ollama volume.
+This writes a local `.env` with `OLLAMA_MODEL` (used for `Ollama__WriterModel` / `Ollama__CriticModel` in Compose) and, if you choose GPU, a gitignored `docker-compose.override.yml` that adds `gpus: all` to the Ollama service. It runs `docker compose up -d --build`, then either **`ollama pull`** for a library tag or, under advanced options: download a **GGUF from an HTTPS URL** (requires `curl` or `wget` on the host) or **copy a local `.gguf` file** from disk, then **`ollama create`** in the container under a name you provide. On **Docker Desktop for Windows** with **Git Bash**, large GGUF files are copied by **streaming into the container via stdin** (avoids Docker’s `cp`/`compose cp` tar path, which often fails with “closed pipe” on multi‑GB files). Other methods are only fallbacks.
 
 In **GPU** mode, setup reads total VRAM for the first GPU (`nvidia-smi`) and only lists curated models that fit: **Qwen2.5 14B instruct (Q4_K_M)** (`qwen2.5:14b-instruct-q4_K_M`), **Mistral Nemo 12B instruct (Q4_K_M)** (`mistral-nemo:12b-instruct-2407-q4_K_M`), and **Gemma3 27B instruct (Q3_K_M)** (`gemma3:27b-instruct-q3_K_M`).
 
@@ -27,8 +27,8 @@ In **GPU** mode, setup reads total VRAM for the first GPU (`nvidia-smi`) and onl
 
 ```bash
 make deploy
-# same as: make docker-up
-# or: docker compose up -d --build
+# same as: make docker-up (uses plain BuildKit progress so long image builds are visible)
+# or: DOCKER_BUILDKIT=1 BUILDKIT_PROGRESS=plain docker compose up -d --build
 ```
 
 `make build` runs `dotnet build` and `npm run build` in `web/` (compile only on your machine). It does **not** rebuild Docker images or redeploy the stack; use **`make deploy`** after changing code you want running in Docker.
@@ -53,6 +53,8 @@ If you did not use `make setup`, pull a model after the stack is up:
    | [http://localhost:11434](http://localhost:11434) | Ollama (host port; optional) |
 
 3. Align **`Ollama:WriterModel`** and **`Ollama:CriticModel`** with the model you pulled. With Docker Compose, set `OLLAMA_MODEL` in `.env` (see `make setup`) or override in Compose; [appsettings.json](api/CreativeLongform.Api/appsettings.json) defaults apply when not using Compose.
+
+**Changing the model after setup:** `OLLAMA_MODEL` in `.env` is the single value Compose substitutes into the API container. After you edit `.env` (or change the model name in Ollama), run `docker compose up -d --force-recreate api` or `make deploy` so the running API process gets the new variables. If you run the API on the host with `dotnet run`, `.env` is **not** loaded — set `Ollama__WriterModel` / `Ollama__CriticModel` in the environment or in `appsettings` to match the model Ollama actually serves (`ollama list`).
 
 The API container uses:
 
@@ -107,7 +109,7 @@ Production builds used in Docker use an **empty** API base URL so the browser ca
 - [api/CreativeLongform.Infrastructure](api/CreativeLongform.Infrastructure) — EF Core, Ollama HTTP client
 - [api/CreativeLongform.Api](api/CreativeLongform.Api) — OData controllers, SignalR hub, generation API
 - [web](web) — Angular client (OData + SignalR)
-- [docker/nginx](docker/nginx) — nginx config for the `web` image
+- [web/nginx](web/nginx) — nginx config for the `web` image
 - [api/Dockerfile](api/Dockerfile), [web/Dockerfile](web/Dockerfile) — container builds
 
 ## API surface

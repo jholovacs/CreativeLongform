@@ -8,6 +8,15 @@ public sealed class GenerationStartOptions
 
     /// <summary>Minimum words for the draft (defaults to Ollama:DraftMinWords, typically 1500–2000).</summary>
     public int? MinWordsOverride { get; set; }
+
+    /// <summary>When true, skips the LLM prose quality gate and repair loop (compliance still runs).</summary>
+    public bool SkipQualityGate { get; set; }
+
+    /// <summary>Overrides <c>Ollama:QualityAcceptMinScore</c> for this run (0–100).</summary>
+    public double? QualityAcceptMinScore { get; set; }
+
+    /// <summary>Overrides <c>Ollama:QualityReviewOnlyMinScore</c> for this run (0–100).</summary>
+    public double? QualityReviewOnlyMinScore { get; set; }
 }
 
 public sealed record FinalizeGenerationResult(string StateTableJson);

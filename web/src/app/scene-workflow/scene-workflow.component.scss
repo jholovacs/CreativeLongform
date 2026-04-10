@@ -267,6 +267,25 @@
     color: var(--text);
   }
 
+  .quality-thresholds {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem 0.75rem;
+    margin-top: 0.75rem;
+    font-size: 0.95rem;
+
+    .quality-label {
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    input[type='number'] {
+      width: 4.25rem;
+      padding: 0.35rem 0.5rem;
+    }
+  }
+
   .generate-actions {
     display: flex;
     flex-wrap: wrap;
@@ -356,21 +375,6 @@
     color: var(--text);
   }
 
-  .gen-log-preview {
-    margin: 0.5rem 0 0;
-    padding: 0.5rem 0.6rem;
-    max-height: 10rem;
-    overflow: auto;
-    font-size: 0.78rem;
-    line-height: 1.4;
-    white-space: pre-wrap;
-    word-break: break-word;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--muted);
-  }
-
   .gen-log-prompt-row {
     display: flex;
     align-items: flex-start;
@@ -383,10 +387,8 @@
       margin: 0;
     }
 
-    .gen-log-preview {
-      flex: 1;
-      min-width: 0;
-      margin: 0;
+    .gen-log-drill .gen-log-request {
+      max-height: min(50vh, 24rem);
     }
   }
 
@@ -412,6 +414,11 @@
 
     &[open] .gen-log-drill-summary {
       margin-bottom: 0.35rem;
+    }
+
+    /** Match native closed behavior; keeps long pre bodies from affecting layout when collapsed. */
+    &:not([open]) > :not(summary) {
+      display: none !important;
     }
   }
 

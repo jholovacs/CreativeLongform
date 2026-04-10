@@ -55,6 +55,7 @@ export interface WorldLinkRow {
   fromTitle: string;
   toTitle: string;
   relationLabel: string;
+  relationDetail?: string | null;
 }
 
 export interface WorldLinksPage {
@@ -82,6 +83,8 @@ export interface Scene {
   narrativeTense?: string | null;
   beginningStateJson?: string | null;
   approvedStateTableJson?: string | null;
+  /** Derived post-scene state after draft generation (before finalize). */
+  pendingPostStateJson?: string | null;
   expectedEndStateNotes?: string | null;
   latestDraftText?: string | null;
 }
@@ -144,6 +147,8 @@ export interface WorldBuildingSuggestedLink {
   fromTitle: string;
   toTitle: string;
   relationLabel: string;
+  /** Set when applying from the UI (optional). */
+  relationDetail?: string | null;
 }
 
 export interface WorldBuildingApplyResult {

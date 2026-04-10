@@ -2,14 +2,15 @@
 # Full stack (Postgres, Ollama, API, nginx + Angular): make docker-up
 
 .PHONY: help setup check-docker check-ollama setup-ollama pull-models db-up db-down migrate build test dev-api dev-web \
-	docker-up deploy docker-down docker-pull-models docker-build
+	docker-up deploy docker-down docker-pull-models docker-build docker-build-plain
 
 help:
 	@echo "Targets:"
-	@echo "  setup                   - interactive: Ollama CPU/GPU, model, then deploy latest stack (docker compose up --build)"
+	@echo "  setup                   - interactive: Ollama CPU/GPU (GPU default if NVIDIA detected), library pull / GGUF URL / local GGUF, then deploy (docker compose up --build)"
 	@echo "  docker-up / deploy      - rebuild api+web Docker images and restart containers (same as: docker compose up -d --build)"
 	@echo "  docker-down             - stop stack"
 	@echo "  docker-build            - build API and web images only (no container restart)"
+	@echo "  docker-build-plain      - same with plain progress (see output if a build looks frozen)"
 	@echo "  docker-pull-models      - ollama pull inside the ollama container (set MODELS, default llama3.2)"
 	@echo "  check-docker            - verify Docker daemon (Docker Desktop)"
 	@echo "  check-ollama            - verify ollama is on PATH (host dev only)"
@@ -46,8 +47,12 @@ docker-pull-models: check-docker
 docker-build: check-docker
 	docker compose build api web
 
+# Verbose build output (use when a build looks stuck — context upload and npm ci can be silent for a long time).
+docker-build-plain: check-docker
+	docker compose build --progress=plain api web
+
 docker-up deploy: check-docker
-	docker compose up -d --build
+	DOCKER_BUILDKIT=1 BUILDKIT_PROGRESS=plain docker compose up -d --build
 
 docker-down: check-docker
 	docker compose down

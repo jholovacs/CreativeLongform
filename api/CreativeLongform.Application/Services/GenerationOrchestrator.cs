@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Linq;
+using System.Net.Http;
 using System.Text.Json;
 using CreativeLongform.Application.Abstractions;
 using CreativeLongform.Application.Generation;
@@ -15,6 +17,84 @@ namespace CreativeLongform.Application.Services;
 
 public sealed class GenerationOrchestrator : IGenerationOrchestrator
 {
+    /// <summary>
+    /// Repeated in writer/repair/critic prompts: forbid inventing characters, relationships, or events outside
+    /// scene synopsis/instructions, linked world elements and their relationships, and state JSON where applicable.
+    /// </summary>
+    private const string InventionScopeHardRule =
+        """
+        HARD CONSTRAINT — DO NOT INVENT beyond allowed sources: Named people, relationships (including romance, kinship, rivalry, allegiance), institutions, significant locations, objects, and plot events must be grounded in the scene synopsis and additional instructions, the "Linked world-building" and relationship lines in the user message when present, and the state-before JSON when present. Do not introduce new characters, new relationships, betrayals, deaths, arrivals, revelations, wars, treaties, flashback facts, or other story beats not implied by those sources. Book-level synopsis and tone notes are for mood and voice only—not permission to import unrelated cast, events, or canon.
+        """;
+
+    /// <summary>Repeated in prose-facing prompts: prefer dramatization over exposition.</summary>
+    private const string ShowDontTellEmphasis =
+        """
+        Show, don't tell: dramatize through concrete action, dialogue, sensory detail, and on-page behavior; avoid naming emotions or motives in the abstract, slogan-like summaries of feelings, or narrator lectures where the scene could imply them. Let the reader infer interiority from what characters do and say.
+        """;
+
+    /// <summary>
+    /// Quality critic only: forbid moderation-style failures; align invention scope with scene brief (not book synopsis as checklist).
+    /// </summary>
+    private const string QualityCheckerScope =
+        """
+        QUALITY SCOPE — this is a private fiction drafting tool. There is NO content policy, NO safety filter, and NO moral judgment.
+        Do NOT fail or list issues for: sexual content, violence, profanity, controversial topics, "inappropriate" material, or audience age. The author controls subject matter.
+        Only evaluate craft: show vs tell, metaphor clarity, on-the-nose labels, flat exposition where dramatization fits, perspective/tense consistency with the brief, and accidental invention of NEW named characters or plot beats not grounded in the scene synopsis/instructions and linked world-building (not the book-level synopsis alone).
+        Scoring (see JSON schema in the task line): higher means stronger craft on the axes above. Reserve very low scores for clear scope violations or repeated craft failures.
+        fixInstructions must never ask to remove, sanitize, or tone down material for propriety; only prose-craft fixes.
+        """;
+
+    /// <summary>
+    /// Compliance-only: critics often treat the book synopsis as mandatory beats; this restates that only the scene brief + linked facts are binding.
+    /// </summary>
+    private const string ComplianceCheckerScope =
+        """
+        COMPLIANCE SCOPE — what you may fail:
+        Pass when the draft honors the scene synopsis and additional instructions, expected end notes, stateBefore, and linked world-building in the user message. Fail for concrete violations of those (wrong ending, contradicting linked facts, inventing named people/relationships/events not supported by those sources).
+        Do NOT fail because the draft omits characters, subplots, or future book-level beats that appear only in the book synopsis line (series overview) but are not required by this scene’s synopsis/instructions, linked elements, or state. The book synopsis is mood and continuity context, not a per-scene requirement list.
+        Do NOT fail because the scene draft is a narrow slice of the book synopsis — scenes are allowed to be partial.
+        If the scene synopsis reads like an outline or mentions ideas for later chapters, treat those as guidance for this scene only where they clearly apply; do not require every outline bullet to appear as prose.
+        """;
+
+    /// <summary>JSON shape and continuity semantics shared by PreState and PostState LLM steps.</summary>
+    private const string NarrativeStateJsonSchemaPrompt =
+        """
+        Canonical JSON shape (schemaVersion: 1):
+        {
+          "schemaVersion": 1,
+          "transitionSummary": string|null,
+          "characters": [
+            {
+              "id": string|null,
+              "name": string,
+              "location": string|null,
+              "pose": string|null,
+              "clothing": string|null,
+              "emotionalState": string|null,
+              "relativeToOthers": string|null,
+              "topOfMind": string[],
+              "traitsShownNotTold": string[]
+            }
+          ],
+          "spatial": { "layout": string|null, "proximity": string|null },
+          "dialogue": { "topic": string|null, "unresolved": string[] },
+          "knowledge": { "povBeliefs": string[], "omniscientFacts": string[] },
+          "environment": { "setting": string|null, "timeOfDay": string|null, "weather": string|null, "sensory": string[] },
+          "plotDevices": string[]
+        }
+        Continuity fields: environment.setting (where we are), timeOfDay, weather, sensory; spatial.layout (space, exits, furniture) and spatial.proximity (blocking: who is near whom); each character: pose (body), clothing, emotionalState, relativeToOthers (position toward others), topOfMind (salient topics/worries/goals into the next scene); dialogue/knowledge for open threads.
+        """;
+
+    /// <summary>Pre-state only: synopsis describes scene action; nothing from those beats has happened yet.</summary>
+    private const string PreSceneSynopsisBoundaryRule =
+        """
+        TEMPORAL BOUNDARY (critical): Pre-state is the instant BEFORE the scene’s first line of prose — before any event described in the synopsis occurs.
+        The synopsis outlines what happens IN this scene; those beats are NOT yet true in pre-state. Do not encode outcomes, injuries, wounds, pain, deaths, arrests, breakups, revelations, decisions, or relationship shifts that the synopsis presents as happening during this scene.
+        Example: if the synopsis says a character is stabbed in this scene, pre-state must not list them as stabbed, wounded, bleeding, or in pain from that event — only their prior condition (e.g. healthy, tense, unaware) as of scene entry.
+        Example: if the synopsis is “they argue and she storms out”, pre-state is before the argument escalates and before she leaves — not mid-fight or after the exit.
+        You MAY set stable facts true at entry: location, who is present, weather, ongoing tensions that already existed before this scene, clothing, pose, prior continuity from the previous scene’s end-state (including prior injuries from earlier story), and emotional baseline before the inciting moment.
+        """;
+
     private sealed record PipelineProgress(IGenerationProgressNotifier Notifier, Func<long> ElapsedMs);
 
     private readonly IServiceScopeFactory _scopeFactory;
@@ -61,8 +141,10 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             StartedAt = DateTimeOffset.UtcNow,
             MaxRepairIterations = 5,
             StopAfterDraft = options?.StopAfterDraft ?? false,
-            MinWordsOverride = options?.MinWordsOverride
+            MinWordsOverride = options?.MinWordsOverride,
+            SkipQualityGate = !_ollamaOptions.Value.QualityGateEnabled || (options?.SkipQualityGate == true)
         };
+        ApplyQualityThresholdsToRun(run, options, _ollamaOptions.Value);
         db.GenerationRuns.Add(run);
         await db.SaveChangesAsync(cancellationToken);
 
@@ -128,24 +210,12 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         var scene = run.Scene;
         var book = scene.Chapter.Book;
         var worldElements = scene.SceneWorldElements.Select(swe => swe.WorldElement).ToList();
-        var worldBlock = WorldContextBuilder.Build(book, worldElements);
+        var worldElementIds = scene.SceneWorldElements.Select(swe => swe.WorldElementId).ToHashSet();
+        var scopedLinks = await LoadSceneScopedWorldElementLinksAsync(db, worldElementIds, cancellationToken);
+        var worldBlock = WorldContextBuilder.Build(book, worldElements, scopedLinks);
         var draft = (acceptedDraftText ?? run.FinalDraftText ?? string.Empty).Trim();
         if (string.IsNullOrEmpty(draft))
             throw new InvalidOperationException("No draft text to finalize.");
-
-        string stateAfter;
-        if (!string.IsNullOrWhiteSpace(approvedStateTableJson))
-        {
-            stateAfter = approvedStateTableJson.Trim();
-            await SaveSnapshotAsync(db, generationRunId, PipelineStep.PostState, stateAfter, cancellationToken);
-        }
-        else
-        {
-            await NotifyStepAsync(notifier, generationRunId, PipelineStep.PostState, finalizeProgress.ElapsedMs,
-                "Finalize: deriving post-scene state from accepted prose.", cancellationToken);
-            stateAfter = await GeneratePostStateAsync(db, ollama, writer, run, scene, draft, worldBlock, finalizeProgress, cancellationToken);
-            await SaveSnapshotAsync(db, generationRunId, PipelineStep.PostState, stateAfter, cancellationToken);
-        }
 
         var preSnap = await db.StateSnapshots.AsNoTracking()
             .Where(s => s.GenerationRunId == generationRunId && s.Step == PipelineStep.PreState)
@@ -153,15 +223,49 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             .FirstOrDefaultAsync(cancellationToken);
         var stateBefore = preSnap?.StateJson ?? "{}";
 
+        string stateAfter;
+        if (!string.IsNullOrWhiteSpace(approvedStateTableJson))
+        {
+            stateAfter = approvedStateTableJson.Trim();
+            await SaveSnapshotAsync(db, generationRunId, PipelineStep.PostState, stateAfter, cancellationToken);
+        }
+        else if (!string.IsNullOrWhiteSpace(scene.PendingPostStateJson)
+                 && string.Equals(draft, (run.FinalDraftText ?? string.Empty).Trim(), StringComparison.Ordinal))
+        {
+            await NotifyStepAsync(notifier, generationRunId, PipelineStep.PostState, finalizeProgress.ElapsedMs,
+                "Finalize: using end-state table from review (draft unchanged; no LLM re-derive).", cancellationToken);
+            stateAfter = scene.PendingPostStateJson.Trim();
+            await SaveSnapshotAsync(db, generationRunId, PipelineStep.PostState, stateAfter, cancellationToken);
+        }
+        else
+        {
+            await NotifyStepAsync(notifier, generationRunId, PipelineStep.PostState, finalizeProgress.ElapsedMs,
+                "Finalize: deriving post-scene state from accepted prose (merged from scene start state).", cancellationToken);
+            stateAfter = await GeneratePostStateAsync(db, ollama, writer, run, scene, stateBefore, draft, worldBlock, finalizeProgress, cancellationToken);
+            await SaveSnapshotAsync(db, generationRunId, PipelineStep.PostState, stateAfter, cancellationToken);
+        }
+
         await NotifyStepAsync(notifier, generationRunId, PipelineStep.TransitionCheck, finalizeProgress.ElapsedMs,
             "Finalize: continuity check across before / prose / after.", cancellationToken);
-        await RunTransitionCheckAsync(db, ollama, critic, run, stateBefore, draft, stateAfter, worldBlock, finalizeProgress, cancellationToken);
+        try
+        {
+            await RunTransitionCheckAsync(db, ollama, critic, run, stateBefore, draft, stateAfter, worldBlock, finalizeProgress, cancellationToken);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(ex, "Transition check skipped during finalize (language model unreachable or error).");
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Transition check skipped during finalize (invalid LLM response).");
+        }
 
         run.FinalDraftText = draft;
         run.Status = GenerationRunStatus.Succeeded;
         run.CompletedAt = DateTimeOffset.UtcNow;
         scene.LatestDraftText = draft;
         scene.ApprovedStateTableJson = stateAfter;
+        scene.PendingPostStateJson = null;
         await db.SaveChangesAsync(cancellationToken);
         await notifier.NotifyAsync(generationRunId, "RunFinished", "Succeeded",
             "Finalization complete; approved state saved to the scene.", cancellationToken, finalizeProgress.ElapsedMs(), null, null);
@@ -169,6 +273,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
     }
 
     public async Task CorrectDraftAsync(Guid sceneId, Guid generationRunId, string userInstruction,
+        string? currentDraftText = null, int? selectionStart = null, int? selectionEnd = null,
         CancellationToken cancellationToken = default)
     {
         var ins = userInstruction.Trim();
@@ -196,14 +301,41 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         var scene = run.Scene;
         var book = scene.Chapter.Book;
         var worldElements = scene.SceneWorldElements.Select(swe => swe.WorldElement).ToList();
-        var worldBlock = WorldContextBuilder.Build(book, worldElements);
-        var draft = run.FinalDraftText ?? scene.LatestDraftText ?? string.Empty;
+        var worldElementIds = scene.SceneWorldElements.Select(swe => swe.WorldElementId).ToHashSet();
+        var scopedLinks = await LoadSceneScopedWorldElementLinksAsync(db, worldElementIds, cancellationToken);
+        var worldBlock = WorldContextBuilder.Build(book, worldElements, scopedLinks);
+        var draft = !string.IsNullOrWhiteSpace(currentDraftText)
+            ? currentDraftText
+            : run.FinalDraftText ?? scene.LatestDraftText ?? string.Empty;
         if (string.IsNullOrEmpty(draft))
             throw new InvalidOperationException("No draft to revise.");
 
-        var text = await RepairDraftWithUserInstructionAsync(db, ollama, writer, run, draft, ins, worldBlock, cancellationToken);
+        if (selectionStart is null ^ selectionEnd is null)
+            throw new ArgumentException("Both selectionStart and selectionEnd must be provided together, or neither.", nameof(selectionStart));
+
+        if (selectionStart is not null && selectionEnd is not null)
+        {
+            var start = selectionStart.Value;
+            var end = selectionEnd.Value;
+            if (start < 0 || end > draft.Length || start >= end)
+                throw new ArgumentException("Invalid selection range for the draft (use UTF-16 indices; end exclusive, same as a textarea).");
+        }
+
+        var preSnap = await db.StateSnapshots.AsNoTracking()
+            .Where(s => s.GenerationRunId == generationRunId && s.Step == PipelineStep.PreState)
+            .OrderByDescending(s => s.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        var stateBeforeJson = preSnap?.StateJson ?? "{}";
+
+        var text = await RepairDraftWithUserInstructionAsync(db, ollama, writer, run, scene, draft, ins, worldBlock,
+            stateBeforeJson, selectionStart, selectionEnd, cancellationToken);
         run.FinalDraftText = text;
         scene.LatestDraftText = text;
+        await db.SaveChangesAsync(cancellationToken);
+
+        var postState = await GeneratePostStateAsync(db, ollama, writer, run, scene, stateBeforeJson, text, worldBlock, progress: null, cancellationToken);
+        await SaveSnapshotAsync(db, generationRunId, PipelineStep.PostState, postState, cancellationToken);
+        scene.PendingPostStateJson = postState;
         await db.SaveChangesAsync(cancellationToken);
     }
 
@@ -238,6 +370,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
         run.MaxRepairIterations = Math.Max(1, run.MaxRepairIterations);
         run.Status = GenerationRunStatus.Running;
+        run.Scene.PendingPostStateJson = null;
         await db.SaveChangesAsync(cancellationToken);
 
         try
@@ -245,7 +378,9 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             var scene = run.Scene;
             var book = scene.Chapter.Book;
             var worldElements = scene.SceneWorldElements.Select(swe => swe.WorldElement).ToList();
-            var worldBlock = WorldContextBuilder.Build(book, worldElements);
+            var worldElementIds = scene.SceneWorldElements.Select(swe => swe.WorldElementId).ToHashSet();
+            var scopedLinks = await LoadSceneScopedWorldElementLinksAsync(db, worldElementIds, cancellationToken);
+            var worldBlock = WorldContextBuilder.Build(book, worldElements, scopedLinks);
             var minWords = Math.Max(100, run.MinWordsOverride ?? _ollamaOptions.Value.DraftMinWords);
 
             await NotifyStepAsync(notifier, runId, PipelineStep.PreState, progress.ElapsedMs,
@@ -286,7 +421,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             {
                 await NotifyStepAsync(notifier, runId, PipelineStep.PostState, progress.ElapsedMs,
                     "Post-state: deriving narrative state from the finished prose.", cancellationToken);
-                var stateAfter = await GeneratePostStateAsync(db, ollama, writer, run, scene, draft, worldBlock, progress, cancellationToken);
+                var stateAfter = await GeneratePostStateAsync(db, ollama, writer, run, scene, stateBefore, draft, worldBlock, progress, cancellationToken);
                 await SaveSnapshotAsync(db, runId, PipelineStep.PostState, stateAfter, cancellationToken);
 
                 await NotifyStepAsync(notifier, runId, PipelineStep.TransitionCheck, progress.ElapsedMs,
@@ -317,7 +452,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
                 text = await RepairDraftForComplianceAsync(db, ollama, writer, run, text, lastCompliance, worldBlock, minWords, progress, cancellationToken);
                 if (!run.StopAfterDraft)
                 {
-                    var newAfter = await GeneratePostStateAsync(db, ollama, writer, run, scene, text, worldBlock, progress, cancellationToken);
+                    var newAfter = await GeneratePostStateAsync(db, ollama, writer, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
                     await SaveSnapshotAsync(db, runId, PipelineStep.PostState, newAfter, cancellationToken);
                 }
             }
@@ -325,27 +460,40 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             if (lastCompliance is not { Pass: true })
                 throw new InvalidOperationException("Instruction compliance did not pass after maximum repair attempts.");
 
-            repairAttempt = 0;
             QualityVerdict? lastQuality = null;
-            while (repairAttempt < run.MaxRepairIterations)
+            if (!run.SkipQualityGate)
+            {
+                var (reviewMin, acceptMin) = GetQualityScoreThresholds(run);
+                var qualityRepairAttempt = 0;
+                while (qualityRepairAttempt < run.MaxRepairIterations)
+                {
+                    await NotifyStepAsync(notifier, runId, PipelineStep.Quality, progress.ElapsedMs,
+                        $"Quality: numeric prose score (pass ≥{reviewMin:0.#}; no repair ≥{acceptMin:0.#}).", cancellationToken);
+                    lastQuality = await EvaluateQualityAsync(db, ollama, critic, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
+                    var q = lastQuality.Score!.Value;
+                    if (q >= acceptMin)
+                        break;
+                    if (q >= reviewMin)
+                        break;
+
+                    qualityRepairAttempt++;
+                    await NotifyStepAsync(notifier, runId, PipelineStep.Repair, progress.ElapsedMs,
+                        $"Repair (quality): revision pass {qualityRepairAttempt} of {run.MaxRepairIterations} (score {q:0.#} < {reviewMin:0.#}).", cancellationToken);
+                    await notifier.NotifyAsync(runId, "RepairAttempt", PipelineStep.Repair.ToString(),
+                        $"Addressing quality feedback — attempt {qualityRepairAttempt}.", cancellationToken,
+                        progress.ElapsedMs(), null, null);
+                    text = await RepairDraftForQualityAsync(db, ollama, writer, run, scene, stateBefore, text, lastQuality, worldBlock, minWords, progress, cancellationToken);
+                }
+
+                if (lastQuality is null || lastQuality.Score is not double qFinal || qFinal < reviewMin)
+                    throw new InvalidOperationException(
+                        $"Prose quality score {(lastQuality?.Score?.ToString("0.#") ?? "?")} is below the configured minimum {reviewMin:0.#} after maximum repair attempts.");
+            }
+            else
             {
                 await NotifyStepAsync(notifier, runId, PipelineStep.Quality, progress.ElapsedMs,
-                    "Quality: prose critique pass (metaphor, voice, on-the-nose labels).", cancellationToken);
-                lastQuality = await EvaluateQualityAsync(db, ollama, critic, run, scene, text, worldBlock, progress, cancellationToken);
-                if (lastQuality.Pass)
-                    break;
-
-                repairAttempt++;
-                await NotifyStepAsync(notifier, runId, PipelineStep.Repair, progress.ElapsedMs,
-                    $"Repair (quality): revision pass {repairAttempt} of {run.MaxRepairIterations}.", cancellationToken);
-                await notifier.NotifyAsync(runId, "RepairAttempt", PipelineStep.Repair.ToString(),
-                    $"Addressing quality feedback — attempt {repairAttempt}.", cancellationToken,
-                    progress.ElapsedMs(), null, null);
-                text = await RepairDraftForQualityAsync(db, ollama, writer, run, text, lastQuality, worldBlock, minWords, progress, cancellationToken);
+                    "Quality gate skipped (configuration or request).", cancellationToken);
             }
-
-            if (lastQuality is not { Pass: true })
-                throw new InvalidOperationException("Prose quality gate did not pass after maximum repair attempts.");
 
             run.FinalDraftText = text;
             scene.LatestDraftText = text;
@@ -353,6 +501,13 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
             if (run.StopAfterDraft)
             {
+                await NotifyStepAsync(notifier, runId, PipelineStep.PostState, progress.ElapsedMs,
+                    "Post-state: deriving end-of-scene narrative table from the draft (for review).", cancellationToken);
+                var postStateForReview = await GeneratePostStateAsync(db, ollama, writer, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
+                await SaveSnapshotAsync(db, runId, PipelineStep.PostState, postStateForReview, cancellationToken);
+                scene.PendingPostStateJson = postStateForReview;
+                await db.SaveChangesAsync(cancellationToken);
+
                 run.Status = GenerationRunStatus.AwaitingUserReview;
                 run.CompletedAt = null;
                 await db.SaveChangesAsync(cancellationToken);
@@ -400,6 +555,20 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         await db.SaveChangesAsync(CancellationToken.None);
         await notifier.NotifyAsync(runId, "RunFinished", "Cancelled",
             "Generation was cancelled.", CancellationToken.None, pipelineSw.ElapsedMilliseconds, null, null);
+    }
+
+    /// <summary>Links whose both endpoints are in the scene-attached element set (for prompt inclusion).</summary>
+    private static async Task<List<WorldElementLink>> LoadSceneScopedWorldElementLinksAsync(
+        ICreativeLongformDbContext db,
+        IReadOnlyCollection<Guid> worldElementIds,
+        CancellationToken cancellationToken)
+    {
+        if (worldElementIds.Count == 0)
+            return [];
+        var ids = worldElementIds as HashSet<Guid> ?? worldElementIds.ToHashSet();
+        return await db.WorldElementLinks.AsNoTracking()
+            .Where(l => ids.Contains(l.FromWorldElementId) && ids.Contains(l.ToWorldElementId))
+            .ToListAsync(cancellationToken);
     }
 
     private static async Task NotifyStepAsync(
@@ -536,12 +705,23 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         PipelineProgress progress,
         CancellationToken cancellationToken)
     {
-        var system = """
-            You output ONLY valid JSON matching a narrative state snapshot. No markdown fences.
-            Schema: { "schemaVersion": 1, "transitionSummary": string|null, "characters": [...], "spatial": {...}, "dialogue": {...}, "knowledge": {...}, "environment": {...}, "plotDevices": string[] }.
-            Characters entries: id, name, location, pose, clothing, emotionalState, traitsShownNotTold (short notes for showing traits through action, not labels).
-            Infer reasonable detail from the scene brief; keep consistent with prior state if provided.
-            Honor world-building and story tone when inferring locations, culture, and facts.
+        var system =
+            """
+            You output ONLY valid JSON matching the narrative state snapshot. No markdown fences.
+            """
+            + NarrativeStateJsonSchemaPrompt
+            + PreSceneSynopsisBoundaryRule
+            + """
+            PRE-SCENE snapshot: continuity at scene entry only — not after any synopsis beat.
+            - If prior state JSON is non-empty, carry forward what still holds at entry; do not import synopsis outcomes into pre-state (see temporal boundary above).
+            - Adjust only starting situation: who is on stage, where they are, baseline mood before the inciting action, stable facts true before the first line of prose.
+            - Fill concrete values: environment.setting, spatial layout/proximity, each on-stage character’s pose, clothing, emotionalState, relativeToOthers, topOfMind as true at entry — not after fights, injuries, or reveals described in the synopsis.
+            - traitsShownNotTold: short cues for showing traits through action, not abstract labels (show, don't tell).
+            """
+            + ShowDontTellEmphasis
+            + InventionScopeHardRule
+            + """
+            JSON must not invent named characters, relationships, or plot facts absent from the synopsis/instructions, linked world-building, prior state, or (when inferring) defensible texture that does not imply new named entities or events.
             """;
         var user = $"""
             Scene title: {scene.Title}
@@ -549,11 +729,11 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             {SceneInstructionsForAgent(scene)}
             Narrative perspective (follow strictly): {scene.NarrativePerspective ?? "(infer from story tone if not specified)"}
             Narrative tense (follow strictly): {scene.NarrativeTense ?? "(infer from story tone if not specified)"}
-            Prior state JSON (may be empty): {priorStateJson ?? "{}"}
+            Prior state JSON (may be empty — previous scene end-state or author seed): {priorStateJson ?? "{}"}
 
             {worldContextBlock}
 
-            Produce state BEFORE the prose is written (establishing shot).
+            Produce pre-scene state only: before anything in the synopsis happens. Do not reflect events, injuries, or outcomes that the synopsis describes as occurring in this scene.
             """;
         var (text, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.PreState, system, user, jsonFormat: true, chatOptions: null, cancellationToken: cancellationToken, progress,
             "Infer beginning narrative state (JSON)");
@@ -576,8 +756,13 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         var proseOptions = new OllamaChatOptions { NumPredict = numPredict };
         var targetBand = Math.Min(2000, Math.Max(minWords, 1500));
 
-        var system = """
+        var system =
+            """
             You are a fiction writer producing long-form prose for novels and serial fiction.
+            """
+            + InventionScopeHardRule
+            + ShowDontTellEmphasis
+            + """
             Follow the scene synopsis, instructions, and the established narrative state.
             Honor the requested narrative perspective and tense exactly.
             Write vivid prose; avoid naming character traits explicitly when a bio already labels them—show through action and detail.
@@ -611,12 +796,17 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             _logger.LogInformation(
                 "Draft short ({Words} words, min {Min}); running expansion pass for run {RunId}",
                 CountWords(text), minWords, run.Id);
-            var expandSystem = """
+            var expandSystem =
+                """
                 You expand fiction for long-form publication. Continue in the same voice, tense, and POV.
+                """
+                + InventionScopeHardRule
+                + ShowDontTellEmphasis
+                + """
                 Add substantive prose—new paragraphs, beats, dialogue, sensory detail—not repetition of the same lines.
                 Do not summarize the scene; extend it. Output prose only, no preamble.
-                Do not introduce new characters or world elements that are not already in the draft or listed under Linked world-building
-                or the scene instructions in the user message.
+                Do not introduce new characters, relationships, or plot events that are not already in the draft or grounded in Linked world-building
+                and the scene synopsis/instructions in the user message.
                 """;
             var expandUser = $"""
                 The draft below is too short for this novel scene. It must reach at least {minWords} words total.
@@ -651,27 +841,74 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         string model,
         GenerationRun run,
         Scene scene,
+        string stateBeforeJson,
         string draftText,
         string worldContextBlock,
         PipelineProgress? progress,
         CancellationToken cancellationToken)
     {
-        var system = """
-            From the prose only (and the scene title for disambiguation), derive the narrative state AFTER the scene.
-            Output ONLY valid JSON, same schema as before (schemaVersion, characters, spatial, dialogue, knowledge, environment, plotDevices, transitionSummary).
-            No markdown fences.
-            World-building below is context only; derive the state from the prose.
+        var system =
+            """
+            You output ONLY valid JSON matching the narrative state snapshot. No markdown fences.
+            """
+            + NarrativeStateJsonSchemaPrompt
+            + """
+            POST-SCENE snapshot: continuity for the NEXT scene.
+            You are given state-before (JSON) — the scene START — and the scene prose. Output the END state by MERGING:
+            - Treat state-before as authoritative baseline. Carry forward every field that still holds unless the prose changes it, removes it, or contradicts it.
+            - Add, remove, or revise characters, environment, spatial, dialogue, knowledge, and plotDevices only as established or clearly implied by the prose (plus state-before where still valid).
+            - Environment: update setting, time, weather, sensory if the prose moves or changes conditions.
+            - Spatial: update layout/proximity when blocking or room configuration changes.
+            - Per character: update pose, clothing, emotionalState, relativeToOthers, topOfMind to match the last moment on the page; remove characters who have left or drop from focus if the prose ends without them.
+            - transitionSummary: one or two sentences on what changed that matters for hooking the next scene.
+            """
+            + InventionScopeHardRule
+            + ShowDontTellEmphasis
+            + """
+            Linked world-building below is context only — do not invent facts absent from state-before + prose, except minor texture consistent with both.
+            traitsShownNotTold: observable behavior, not abstract trait labels.
             """;
         var user = $"""
             Scene title: {scene.Title}
-            Prose:
+            Scene synopsis and instructions (context; do not add plot beats not in prose):
+            {SceneInstructionsForAgent(scene)}
+            Expected end notes (if any): {scene.ExpectedEndStateNotes ?? "(none)"}
+            Narrative perspective: {scene.NarrativePerspective ?? "(from prose)"}
+            Narrative tense: {scene.NarrativeTense ?? "(from prose)"}
+
+            State BEFORE this scene (merge from this — same run’s pre-state):
+            {stateBeforeJson}
+
+            Scene prose (apply changes from this):
             {draftText}
 
             {worldContextBlock}
             """;
-        var (text, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.PostState, system, user, jsonFormat: true, chatOptions: null, cancellationToken: cancellationToken, progress,
-            "Derive post-scene narrative state (JSON)");
+        var postStatePredict = new OllamaChatOptions { NumPredict = Math.Max(2048, _ollamaOptions.Value.DraftNumPredict) };
+        var (text, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.PostState, system, user, jsonFormat: true, postStatePredict, cancellationToken: cancellationToken, progress,
+            "Derive post-scene narrative state (JSON, merged from pre-state)");
         return LlmJson.StripMarkdownFences(text);
+    }
+
+    /// <summary>
+    /// Invokes <paramref name="callOnce"/> up to two times. Returns null when both responses are empty JSON objects <c>{}</c>
+    /// (caller should apply a safe default and continue — do not feed empty output to repair loops).
+    /// </summary>
+    private async Task<string?> ChatJsonOrNullIfEmptyAfterRetryAsync(
+        Func<Task<string>> callOnce,
+        string stepLabel)
+    {
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var text = await callOnce();
+            if (!LlmJson.IsEmptyJsonObject(text))
+                return text;
+            if (attempt == 0)
+                _logger.LogWarning("Model returned empty JSON object for {Step}; retrying once.", stepLabel);
+        }
+
+        _logger.LogWarning("Model returned empty JSON object for {Step} after retry; continuing with default verdict.", stepLabel);
+        return null;
     }
 
     private async Task<bool> RunTransitionCheckAsync(
@@ -686,10 +923,16 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         PipelineProgress? progress,
         CancellationToken cancellationToken)
     {
-        var system = """
-            You verify narrative continuity. Output ONLY JSON: { "pass": bool, "gaps": string[] }.
-            Check that the prose plausibly transitions from stateBefore to stateAfter; list concrete gaps if not.
+        var system =
+            """
+            You verify narrative continuity. Output ONLY JSON: { "pass": bool, "gaps": string[] }. Never output an empty object {}.
+            stateAfter should be the merged end-state after the prose (start snapshot + changes from the scene). Check that the prose plausibly accounts for changes from stateBefore to stateAfter (environment, positions, dress, emotional shifts, who is present).
+            List concrete gaps if the prose cannot support the delta, or if stateAfter drops continuity facts the prose still implies.
             Flag contradictions with established world-building or story tone when relevant.
+            """
+            + InventionScopeHardRule
+            + """
+            If the prose invents named characters, relationships, or major plot events not allowed by the synopsis, linked world-building, or prior state, treat that as a serious gap.
             """;
         var user = $"""
             stateBefore: {stateBefore}
@@ -698,10 +941,20 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
             {worldContextBlock}
             """;
-        var (text, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.TransitionCheck, system, user, jsonFormat: true, chatOptions: null, cancellationToken: cancellationToken, progress,
-            "Continuity check (before / prose / after)");
-        var verdict = LlmJson.Deserialize<TransitionVerdict>(text);
-        var pass = verdict?.Pass ?? false;
+        var transitionOptions = new OllamaChatOptions { NumPredict = 2048 };
+        var textOrNull = await ChatJsonOrNullIfEmptyAfterRetryAsync(
+            async () =>
+            {
+                var (t, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.TransitionCheck, system, user,
+                    jsonFormat: true, transitionOptions, cancellationToken: cancellationToken, progress,
+                    "Continuity check (before / prose / after)");
+                return t;
+            },
+            "transition check");
+        var verdict = textOrNull is null
+            ? new TransitionVerdict { Pass = true, Gaps = new List<string>() }
+            : LlmJson.Deserialize<TransitionVerdict>(textOrNull);
+        var pass = verdict?.Pass ?? true;
         await db.ComplianceEvaluations.AddAsync(new ComplianceEvaluation
         {
             Id = Guid.NewGuid(),
@@ -709,7 +962,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             Passed = pass,
             Kind = "Transition",
             AttemptNumber = 0,
-            VerdictJson = JsonSerializer.Serialize(verdict ?? new TransitionVerdict { Pass = false, Gaps = new List<string> { "parse_failed" } }),
+            VerdictJson = JsonSerializer.Serialize(verdict ?? new TransitionVerdict { Pass = true, Gaps = new List<string>() }),
             CreatedAt = DateTimeOffset.UtcNow
         }, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
@@ -728,11 +981,20 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         PipelineProgress? progress,
         CancellationToken cancellationToken)
     {
-        var system = """
-            You check instruction compliance. Output ONLY JSON:
-            { "pass": bool, "violations": string[], "fixInstructions": string[] }.
-            Violations: wrong ending vs instructions, invented characters or facts, ignored constraints, contradictions of linked world-building or story tone.
+        var system =
+            """
+            You check instruction compliance. Output ONLY one JSON object, no markdown fences.
+            Required shape (always include every key): { "pass": boolean, "violations": string[], "fixInstructions": string[] }.
+            You MUST set "pass" explicitly to true or false. Never output an empty object {}.
+            If there are no violations, use "pass": true and empty arrays: "violations": [], "fixInstructions": [].
+            Violations: wrong ending vs scene instructions, invented characters or relationships or plot events not grounded in the scene synopsis/instructions (below), stateBefore, and linked world-building — not in the book-level synopsis alone. Ignored scene constraints, contradictions of linked world-building, undue telling or labeled emotion where the brief allows dramatization (show, don't tell).
             fixInstructions: minimal edits to fix issues while preserving voice.
+            """
+            + ComplianceCheckerScope
+            + ShowDontTellEmphasis
+            + InventionScopeHardRule
+            + """
+            Treat any invented named character, relationship, or story event outside the scene brief, stateBefore, and linked world-building as a compliance failure — not merely because the book synopsis elsewhere mentions different characters or future plot.
             """;
         var user = $"""
             Scene synopsis and instructions:
@@ -743,10 +1005,19 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
             {worldContextBlock}
             """;
-        var (text, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Compliance, system, user, jsonFormat: true, chatOptions: null, cancellationToken: cancellationToken, progress,
-            "Instruction compliance check");
-        var verdict = LlmJson.Deserialize<ComplianceVerdict>(text)
-                      ?? new ComplianceVerdict { Pass = true, Violations = new List<string>(), FixInstructions = new List<string>() };
+        var complianceOptions = new OllamaChatOptions { NumPredict = 2048 };
+        var textOrNull = await ChatJsonOrNullIfEmptyAfterRetryAsync(
+            async () =>
+            {
+                var (t, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Compliance, system, user,
+                    jsonFormat: true, complianceOptions, cancellationToken: cancellationToken, progress,
+                    "Instruction compliance check");
+                return t;
+            },
+            "instruction compliance");
+        var verdict = textOrNull is null
+            ? new ComplianceVerdict { Pass = true, Violations = new List<string>(), FixInstructions = new List<string>() }
+            : LlmJson.DeserializeComplianceVerdict(textOrNull);
         await db.ComplianceEvaluations.AddAsync(new ComplianceEvaluation
         {
             Id = Guid.NewGuid(),
@@ -767,35 +1038,61 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         string model,
         GenerationRun run,
         Scene scene,
+        string stateBefore,
         string draft,
         string worldContextBlock,
         PipelineProgress? progress,
         CancellationToken cancellationToken)
     {
-        var system = """
+        var system =
+            """
             You critique prose quality for long-form fiction. Output ONLY JSON:
-            { "pass": bool, "issues": string[], "fixInstructions": string[] }.
-            Flag ambiguous or incongruous metaphors/similes, on-the-nose trait labels (e.g. "being analytical"), over-explanation of motives, flat characters.
-            Ensure tone aligns with the story-level description when provided.
-            fixInstructions: targeted rewrites; preserve plot and compliance.
+            { "score": number, "issues": string[], "fixInstructions": string[] }. Never output an empty object {}.
+            score: one number from 0 (serious craft or scope problems) to 100 (strong craft for this brief). Use the full range; reserve the high 90s–100 for genuinely polished work.
+            issues: concrete problem areas for the author (may be non-empty even when score is high — for manual review).
+            fixInstructions: optional targeted craft fixes; may be empty when issues are minor.
+            """
+            + QualityCheckerScope
+            + ShowDontTellEmphasis
+            + InventionScopeHardRule
+            + """
+            Lower the score for prose that smuggles in new named characters, relationships, or plot events not grounded in the scene synopsis/instructions, expected end notes, state-before JSON, and linked world-building — not merely because the book-level synopsis elsewhere mentions different characters or future plot.
+            Plot beats and facts that appear in the scene synopsis, instructions, expected end notes, or state-before JSON are authorized; do not treat them as inventions.
+            fixInstructions: targeted craft rewrites only; preserve plot and compliance; do not suggest adding new characters or events outside scope; never sanitize for propriety.
             """;
         var user = $"""
-            Scene synopsis and instructions (for tone): {SceneInstructionsForAgent(scene)}
+            Scene title: {scene.Title}
+            Scene synopsis and instructions:
+            {SceneInstructionsForAgent(scene)}
             Narrative perspective: {scene.NarrativePerspective ?? "(any)"}
             Narrative tense: {scene.NarrativeTense ?? "(any)"}
+            Expected end notes (if any): {scene.ExpectedEndStateNotes ?? "(none)"}
+            State before (JSON): {stateBefore}
             draft: {draft}
 
             {worldContextBlock}
             """;
-        var (text, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Quality, system, user, jsonFormat: true, chatOptions: null, cancellationToken: cancellationToken, progress,
-            "Prose quality critique");
-        var verdict = LlmJson.Deserialize<QualityVerdict>(text)
-                      ?? new QualityVerdict { Pass = true, Issues = new List<string>(), FixInstructions = new List<string>() };
+        var qualityOptions = new OllamaChatOptions { NumPredict = 2048 };
+        var textOrNull = await ChatJsonOrNullIfEmptyAfterRetryAsync(
+            async () =>
+            {
+                var (t, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Quality, system, user,
+                    jsonFormat: true, qualityOptions, cancellationToken: cancellationToken, progress,
+                    "Prose quality critique");
+                return t;
+            },
+            "prose quality");
+        var verdict = textOrNull is null
+            ? new QualityVerdict { Issues = new List<string>(), FixInstructions = new List<string>() }
+            : LlmJson.Deserialize<QualityVerdict>(textOrNull)
+              ?? new QualityVerdict { Issues = new List<string>(), FixInstructions = new List<string>() };
+        verdict = NormalizeQualityVerdict(verdict);
+        var (reviewMin, _) = GetQualityScoreThresholds(run);
         await db.ComplianceEvaluations.AddAsync(new ComplianceEvaluation
         {
             Id = Guid.NewGuid(),
             GenerationRunId = run.Id,
-            Passed = verdict.Pass,
+            Passed = verdict.Score >= reviewMin,
             Kind = "Quality",
             AttemptNumber = 0,
             VerdictJson = JsonSerializer.Serialize(verdict),
@@ -803,6 +1100,56 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         }, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return verdict;
+    }
+
+    /// <summary>Clamps score to 0–100; infers score from legacy <c>pass</c> when missing.</summary>
+    private static QualityVerdict NormalizeQualityVerdict(QualityVerdict verdict)
+    {
+        verdict.Issues ??= new List<string>();
+        verdict.Issues = verdict.Issues.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList();
+        verdict.FixInstructions ??= new List<string>();
+        verdict.FixInstructions = verdict.FixInstructions.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList();
+
+        double score;
+        if (verdict.Score is { } raw && !double.IsNaN(raw) && !double.IsInfinity(raw))
+            score = Math.Clamp(raw, 0, 100);
+        else if (verdict.Pass == true)
+            score = 82;
+        else if (verdict.Pass == false)
+            score = 42;
+        else
+            score = verdict.Issues.Count == 0 ? 78 : 62;
+
+        verdict.Score = score;
+        return verdict;
+    }
+
+    /// <summary>
+    /// Snapshots effective quality thresholds on the run (request overrides, then Ollama config).
+    /// </summary>
+    private static void ApplyQualityThresholdsToRun(GenerationRun run, GenerationStartOptions? options, OllamaOptions config)
+    {
+        var accept = options?.QualityAcceptMinScore ?? config.QualityAcceptMinScore;
+        var review = options?.QualityReviewOnlyMinScore ?? config.QualityReviewOnlyMinScore;
+        run.QualityAcceptMinScore = Math.Clamp(accept, 0, 100);
+        run.QualityReviewOnlyMinScore = Math.Clamp(review, 0, 100);
+    }
+
+    /// <summary>
+    /// Ensures review floor ≤ accept line; both clamped to 0–100.
+    /// </summary>
+    private static (double ReviewMin, double AcceptMin) GetQualityScoreThresholds(GenerationRun run)
+    {
+        return GetQualityScoreThresholds(run.QualityAcceptMinScore, run.QualityReviewOnlyMinScore);
+    }
+
+    private static (double ReviewMin, double AcceptMin) GetQualityScoreThresholds(double acceptMin, double reviewMin)
+    {
+        var accept = Math.Clamp(acceptMin, 0, 100);
+        var review = Math.Clamp(reviewMin, 0, 100);
+        if (review > accept)
+            (review, accept) = (accept, review);
+        return (review, accept);
     }
 
     private async Task<string> RepairDraftForComplianceAsync(
@@ -818,9 +1165,14 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         CancellationToken cancellationToken)
     {
         var proseOptions = new OllamaChatOptions { NumPredict = Math.Max(1024, _ollamaOptions.Value.DraftNumPredict) };
-        var system = """
+        var system =
+            """
             Revise the draft to address the issues. Preserve voice and plot. Output prose only.
             Do not contradict story tone or linked world-building.
+            """
+            + InventionScopeHardRule
+            + ShowDontTellEmphasis
+            + """
             Keep the result as substantial long-form scene prose (multiple paragraphs when appropriate), not a brief summary.
             """;
         var fixList = string.Join("\n", verdict.FixInstructions);
@@ -848,6 +1200,8 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         IOllamaClient ollama,
         string model,
         GenerationRun run,
+        Scene scene,
+        string stateBefore,
         string draft,
         QualityVerdict verdict,
         string worldContextBlock,
@@ -856,11 +1210,23 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         CancellationToken cancellationToken)
     {
         var proseOptions = new OllamaChatOptions { NumPredict = Math.Max(1024, _ollamaOptions.Value.DraftNumPredict) };
-        var system = """
-            Revise the draft to address the prose issues. Preserve plot and instruction compliance. Output prose only.
+        var system =
+            """
+            Revise the draft to address the prose craft issues. Preserve plot and instruction compliance. Output prose only.
+            Do not remove, bowdlerize, or soften content for modesty, safety, or audience concerns — this is uncensored private fiction; only improve craft (voice, clarity, show vs tell).
+            """
+            + InventionScopeHardRule
+            + ShowDontTellEmphasis
+            + """
             Maintain substantial scene length (multiple paragraphs) suitable for long-form fiction, not a terse fix.
             """;
         var user = $"""
+            Scene synopsis and instructions:
+            {SceneInstructionsForAgent(scene)}
+            Expected end notes (if any): {scene.ExpectedEndStateNotes ?? "(none)"}
+            State before (JSON): {stateBefore}
+            Latest critic quality score (0–100, higher is better): {verdict.Score:0.#}
+
             Current draft:
             {draft}
 
@@ -884,27 +1250,91 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         IOllamaClient ollama,
         string model,
         GenerationRun run,
+        Scene scene,
         string draft,
         string userInstruction,
         string worldContextBlock,
+        string stateBeforeJson,
+        int? selectionStart,
+        int? selectionEnd,
         CancellationToken cancellationToken)
     {
         var proseOptions = new OllamaChatOptions { NumPredict = Math.Max(1024, _ollamaOptions.Value.DraftNumPredict) };
-        var system = """
+        var perspective = scene.NarrativePerspective ?? "(infer from story tone if not specified)";
+        var tense = scene.NarrativeTense ?? "(infer from story tone if not specified)";
+        var sceneBlock = $"""
+            Narrative perspective (follow strictly): {perspective}
+            Narrative tense (follow strictly): {tense}
+
+            Scene synopsis and instructions:
+            {SceneInstructionsForAgent(scene)}
+            Expected end notes (if any): {scene.ExpectedEndStateNotes ?? "(none)"}
+            State before (JSON): {stateBeforeJson}
+            """;
+
+        if (selectionStart is int start && selectionEnd is int end && end > start)
+        {
+            var selected = draft[start..end];
+            var system =
+                """
+                You replace one selected passage of fiction prose according to the author's instruction. The user message includes the full draft for context only.
+                """
+                + InventionScopeHardRule
+                + ShowDontTellEmphasis
+                + """
+                OUTPUT FORMAT — output ONLY valid JSON: {"replacement":"..."}. The "replacement" string is the new prose for the selected passage only (not the whole scene). Match voice, tense, and perspective of the surrounding draft. No markdown fences, no extra keys, no explanation.
+                """;
+            var user = $"""
+                [SELECTION MODE — UTF-16 indices {start}..{end} exclusive]
+
+                {sceneBlock}
+
+                Full draft for context (do not output this in full — only the JSON replacement field):
+                ---
+                {draft}
+                ---
+
+                Selected passage to replace (verbatim from the draft):
+                ---
+                {selected}
+                ---
+
+                Author instruction (applies to the selected passage only):
+                {userInstruction}
+
+                {worldContextBlock}
+                """;
+            var (text, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Repair, system, user,
+                jsonFormat: true, proseOptions, cancellationToken: cancellationToken);
+            var parsed = LlmJson.Deserialize<DraftReplacementJson>(text)
+                         ?? throw new InvalidOperationException("Model did not return valid replacement JSON.");
+            var replacement = parsed.Replacement ?? "";
+            return draft[..start] + replacement + draft[end..];
+        }
+
+        var systemFull =
+            """
             You revise fiction prose according to the author's explicit instructions. Preserve continuity and voice unless the author asks otherwise.
+            """
+            + InventionScopeHardRule
+            + ShowDontTellEmphasis
+            + """
             Output prose only, no preamble.
             """;
-        var user = $"""
+        var userFull = $"""
+            {sceneBlock}
+
             Author instruction:
             {userInstruction}
 
-            Current draft:
+            Current draft (revise as a whole per instruction):
             {draft}
 
             {worldContextBlock}
             """;
-        var (text, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Repair, system, user, jsonFormat: false, proseOptions, cancellationToken: cancellationToken);
-        return text.Trim();
+        var (textFull, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Repair, systemFull, userFull,
+            jsonFormat: false, proseOptions, cancellationToken: cancellationToken);
+        return textFull.Trim();
     }
 
     private async Task SaveSnapshotAsync(
@@ -970,26 +1400,15 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         if (progress != null)
         {
             var label = progressSummary ?? step.ToString();
-            var preview = TruncatePreview(result.MessageText, 520);
             await progress.Notifier.NotifyAsync(runId, "LlmRoundtrip", step.ToString(),
                 $"{label}: model «{model}» returned {result.MessageText.Length:N0} characters in {roundSw.ElapsedMilliseconds} ms.",
                 cancellationToken,
                 progress.ElapsedMs(),
                 roundSw.ElapsedMilliseconds,
-                preview,
+                result.MessageText,
                 req);
         }
 
         return (result.MessageText, result.MessageText);
-    }
-
-    private static string TruncatePreview(string? text, int maxChars)
-    {
-        if (string.IsNullOrEmpty(text))
-            return "";
-        var t = text.Trim();
-        if (t.Length <= maxChars)
-            return t;
-        return t[..maxChars] + "…";
     }
 }

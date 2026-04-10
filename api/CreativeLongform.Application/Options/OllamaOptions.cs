@@ -25,4 +25,16 @@ public sealed class OllamaOptions
 
     /// <summary>Ollama num_predict for each agentic edit JSON turn.</summary>
     public int AgenticEditNumPredict { get; set; } = 2048;
+
+    /// <summary>When false, the prose quality critic loop is skipped for all runs (compliance still runs). Per-run override: GenerationStartOptions.SkipQualityGate.</summary>
+    public bool QualityGateEnabled { get; set; } = true;
+
+    /// <summary>Quality score 0–100; at or above this, no automated repair is attempted.</summary>
+    public double QualityAcceptMinScore { get; set; } = 75;
+
+    /// <summary>
+    /// Minimum score to pass the pipeline. Between this and <see cref="QualityAcceptMinScore"/>, the run passes with issues annotated for manual review (no repair).
+    /// Below this, the repair loop runs until score reaches at least this or max attempts.
+    /// </summary>
+    public double QualityReviewOnlyMinScore { get; set; } = 55;
 }

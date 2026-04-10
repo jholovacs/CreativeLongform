@@ -63,7 +63,9 @@ describe('BookWorldComponent', () => {
       (r) =>
         r.url.endsWith(`/api/books/${bookId}/world/links`) &&
         r.params.get('skip') === '0' &&
-        r.params.get('take') === '10'
+        r.params.get('take') === '10' &&
+        r.params.get('sortBy') === 'relation' &&
+        r.params.get('sortDesc') === 'false'
     );
     linksReq.flush({ totalCount: 0, items: [] });
 

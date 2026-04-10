@@ -16,6 +16,8 @@ public static class AgenticEditLoop
     private const int FullDraftCharBudget = 60_000;
     private const int SummaryPrefixChars = 140;
     private const int MaxReplacementChars = 80_000;
+    /// <summary>Max chars of raw JSON sent on SignalR as llmPreview (full response is always persisted on the generation run LLM call log).</summary>
+    private const int ProgressLlmPreviewMaxChars = 500_000;
 
     private static readonly string SystemPrompt = """
         You are a fiction editor agent refining a scene draft. You improve clarity, pacing, and alignment with instructions using tools.
@@ -29,6 +31,9 @@ public static class AgenticEditLoop
         Rules:
         - Prefer small targeted patches; avoid rewriting the whole scene unless necessary.
         - Preserve continuity, voice, and facts implied by scene instructions and world context.
+        - Show, don't tell: patches should add or refine concrete action, dialogue, and sensory detail; avoid replacing dramatized beats with abstract emotional labels or explanatory narration unless the author instruction requires it.
+        - Reference variety: do not lean on repeating characters' full names every time they appear. Mix in relationship to the viewpoint character (e.g. "her brother", "the detective"), role or attitude from the POV ("the woman who'd lied to him"), physical or situational anchors ("the man at the bar"), and occasional name use for clarity—especially on first introduction or when many people are in the scene.
+        - HARD CONSTRAINT: Do not introduce named characters, relationships, or plot events not already allowed by the scene synopsis/instructions and the Linked world-building / relationship text in the user message. Do not invent story beats to "improve" the scene.
         - Indices always refer to the CURRENT draft shown in the message (after any prior patches in this session).
         """;
 
@@ -75,13 +80,13 @@ public static class AgenticEditLoop
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Agentic edit turn {Turn}: invalid JSON", turn);
-                lastToolResult = $"Error: output was not valid JSON. Fix and try again. Raw (truncated): {Truncate(cleaned, 400)}";
+                lastToolResult = $"Error: output was not valid JSON. Fix and try again. Raw (truncated): {Truncate(cleaned, ProgressLlmPreviewMaxChars)}";
                 await notifier.NotifyAsync(runId, "AgentEditTurn", nameof(PipelineStep.AgentEdit),
                     $"Turn {turn}/{maxTurns}: model returned invalid JSON; the editor will retry. ({turnSw.ElapsedMilliseconds} ms for LLM)",
                     cancellationToken,
                     pipelineElapsedMs(),
                     turnSw.ElapsedMilliseconds,
-                    Truncate(cleaned, 400),
+                    Truncate(cleaned, ProgressLlmPreviewMaxChars),
                     SerializeAgentLlmPrompt(SystemPrompt, user));
                 continue;
             }
@@ -94,7 +99,7 @@ public static class AgenticEditLoop
                     cancellationToken,
                     pipelineElapsedMs(),
                     turnSw.ElapsedMilliseconds,
-                    Truncate(cleaned, 400),
+                    Truncate(cleaned, ProgressLlmPreviewMaxChars),
                     SerializeAgentLlmPrompt(SystemPrompt, user));
                 continue;
             }
@@ -104,7 +109,7 @@ public static class AgenticEditLoop
                 ? $"Turn {turn}/{maxTurns}: editor finished — {Truncate(action.Reason ?? "(no reason)", 200)} (LLM {turnSw.ElapsedMilliseconds} ms)"
                 : $"Turn {turn}/{maxTurns}: tool action «{kind}» (LLM {turnSw.ElapsedMilliseconds} ms)";
             await notifier.NotifyAsync(runId, "AgentEditTurn", nameof(PipelineStep.AgentEdit), detail, cancellationToken,
-                pipelineElapsedMs(), turnSw.ElapsedMilliseconds, Truncate(cleaned, 400),
+                pipelineElapsedMs(), turnSw.ElapsedMilliseconds, Truncate(cleaned, ProgressLlmPreviewMaxChars),
                 SerializeAgentLlmPrompt(SystemPrompt, user));
 
             switch (kind)

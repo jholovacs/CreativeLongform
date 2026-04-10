@@ -17,6 +17,12 @@ public class GenerationRun
     public bool StopAfterDraft { get; set; }
     /// <summary>Optional override for minimum draft word target (e.g. 1500).</summary>
     public int? MinWordsOverride { get; set; }
+    /// <summary>When true, skips the critic quality loop (compliance still runs). Set via request or when Ollama:QualityGateEnabled is false.</summary>
+    public bool SkipQualityGate { get; set; }
+    /// <summary>Effective quality score threshold (0–100): at or above this, no automated repair. Snapshotted from request + Ollama config when the run starts.</summary>
+    public double QualityAcceptMinScore { get; set; } = 75;
+    /// <summary>Minimum score to pass the pipeline; between this and <see cref="QualityAcceptMinScore"/>, pass with annotations only. Snapshotted at run start.</summary>
+    public double QualityReviewOnlyMinScore { get; set; } = 55;
     public string? FinalDraftText { get; set; }
     public ICollection<StateSnapshot> StateSnapshots { get; set; } = new List<StateSnapshot>();
     public ICollection<LlmCall> LlmCalls { get; set; } = new List<LlmCall>();

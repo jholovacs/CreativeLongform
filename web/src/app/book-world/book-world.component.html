@@ -1042,6 +1042,49 @@
       [disabled]="busy"
       [title]="fieldHelp.linksSearch"
     />
+    <div class="links-toolbar">
+      <label>
+        Involving element
+        <select
+          [(ngModel)]="linksWorldElementFilterId"
+          (ngModelChange)="onLinksFilterOrSortChange()"
+          name="linksWorldElementFilter"
+          [disabled]="busy"
+          [title]="fieldHelp.linksElementFilter"
+        >
+          <option [ngValue]="''">All elements</option>
+          @for (el of pickerElements; track el.id) {
+            <option [ngValue]="el.id">{{ el.kind }}: {{ el.title }}</option>
+          }
+        </select>
+      </label>
+      <label>
+        Sort by
+        <select
+          [(ngModel)]="linksSortKey"
+          (ngModelChange)="onLinksFilterOrSortChange()"
+          name="linksSortKey"
+          [disabled]="busy"
+          [title]="fieldHelp.linksSort"
+        >
+          <option value="relation">Relation</option>
+          <option value="from">From (title)</option>
+          <option value="to">To (title)</option>
+          <option value="detail">Relationship detail</option>
+        </select>
+      </label>
+      <label class="links-sort-desc">
+        <input
+          type="checkbox"
+          [(ngModel)]="linksSortDesc"
+          (ngModelChange)="onLinksFilterOrSortChange()"
+          name="linksSortDesc"
+          [disabled]="busy"
+          [title]="fieldHelp.linksSortDesc"
+        />
+        Descending
+      </label>
+    </div>
     <div class="pager" role="navigation" aria-label="Links pages">
       <button
         type="button"
@@ -1091,6 +1134,7 @@
           <th>From</th>
           <th>Relation</th>
           <th>To</th>
+          <th>Detail</th>
           <th></th>
         </tr>
       </thead>
@@ -1100,7 +1144,18 @@
             <td>{{ row.fromTitle }}</td>
             <td>{{ formatRelationLabel(row.relationLabel) }}</td>
             <td>{{ row.toTitle }}</td>
-            <td>
+            <td class="link-detail-cell" [attr.title]="row.relationDetail?.trim() || null">{{ linkDetailCell(row.relationDetail) }}</td>
+            <td class="link-actions-cell">
+              <button
+                type="button"
+                class="btn-icon"
+                [title]="fieldHelp.linkDetailEdit"
+                (click)="openLinkDetailModal(row)"
+                [disabled]="busy"
+              >
+                <app-ui-icon name="pencil" />
+                <span class="sr-only">Edit relationship detail</span>
+              </button>
               <button type="button" class="danger btn-icon" title="Remove link" (click)="removeLink(row)" [disabled]="busy">
                 <app-ui-icon name="trash" />
                 <span class="sr-only">Remove link</span>
@@ -1113,8 +1168,8 @@
     @if (linksTotalCount === 0) {
       <p>
         {{
-          linksSearchQuery.trim()
-            ? 'No links match your search.'
+          linksSearchQuery.trim() || linksWorldElementFilterId.trim()
+            ? 'No links match your search or involving-element filter.'
             : 'No links yet. Add one below or use world-building tools.'
         }}
       </p>
@@ -1153,6 +1208,16 @@
           [title]="fieldHelp.linkLabel"
         />
       </label>
+      <label class="link-detail-field">
+        Relationship detail (optional)
+        <textarea
+          [(ngModel)]="linkRelationDetail"
+          rows="3"
+          placeholder="Nuance for prompts when both entries are linked to a scene"
+          [disabled]="busy"
+          [title]="fieldHelp.linkRelationDetail"
+        ></textarea>
+      </label>
     </div>
     <button type="button" class="btn-with-icon" (click)="addLink()" [disabled]="busy">
       <app-ui-icon name="plus" />
@@ -1160,6 +1225,50 @@
     </button>
     </div>
   </details>
+
+  @if (linkDetailModalOpen) {
+    <div class="modal-backdrop" (click)="closeLinkDetailModal()" aria-hidden="true"></div>
+    <div
+      class="modal-panel"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="link-detail-title"
+      (click)="$event.stopPropagation()"
+    >
+      <div class="modal-header">
+        <h2 id="link-detail-title">Edit link</h2>
+        <button type="button" class="btn-icon modal-close-btn" (click)="closeLinkDetailModal()" aria-label="Close">
+          <app-ui-icon name="x" />
+          <span class="sr-only">Close</span>
+        </button>
+      </div>
+      <p class="hint" [title]="fieldHelp.linkDetailEdit">
+        Relation label identifies the link; optional detail is included in generation prompts only when both linked world elements are attached to the scene.
+      </p>
+      <label for="link-detail-label">Relation</label>
+      <input
+        id="link-detail-label"
+        type="text"
+        [(ngModel)]="linkDetailPatchLabel"
+        maxlength="128"
+        [disabled]="busy"
+        [title]="fieldHelp.linkLabel"
+      />
+      <label for="link-detail-ta">Detail</label>
+      <textarea
+        id="link-detail-ta"
+        [(ngModel)]="linkDetailPatchText"
+        rows="8"
+        maxlength="4000"
+        [disabled]="busy"
+        [title]="fieldHelp.linkRelationDetail"
+      ></textarea>
+      <div class="modal-actions">
+        <button type="button" (click)="closeLinkDetailModal()" [disabled]="busy">Cancel</button>
+        <button type="button" class="primary" (click)="saveLinkDetail()" [disabled]="busy">Save</button>
+      </div>
+    </div>
+  }
 
   @if (llmSuggestWorking) {
     <div class="modal-backdrop modal-backdrop-busy" aria-hidden="true"></div>
@@ -1197,8 +1306,9 @@
     >
       <h2 id="suggest-links-title">Suggested Links</h2>
       <p class="hint">
-        The model proposes relations between entries. Edit the relationship label if needed. Uncheck any you do not want, then
-        confirm. Nothing is saved until you click &quot;Create selected links&quot;.
+        The model proposes relations between entries. Adjust From, To, and the relationship label as needed; add optional detail
+        for scene-scoped prompts. Uncheck any you do not want, then confirm. Nothing is saved until you click &quot;Create
+        selected links&quot;.
       </p>
       <div class="suggest-list">
         @for (link of suggestedLinks; track $index; let i = $index) {
@@ -1210,11 +1320,41 @@
               [title]="fieldHelp.suggestedLinkCheckbox"
             />
             <div class="suggest-row-main">
-              <div class="suggest-text">
-                <strong>{{ link.fromTitle }}</strong>
+              <div class="suggest-endpoints">
+                <label>
+                  From
+                  <select
+                    [(ngModel)]="suggestedLinkFromIdDrafts[i]"
+                    [name]="'sfrom' + i"
+                    [disabled]="suggestModalBusy"
+                    [title]="fieldHelp.linkFrom"
+                  >
+                    <option value="">—</option>
+                    @for (el of pickerElements; track el.id) {
+                      <option [ngValue]="el.id">{{ el.title }}</option>
+                    }
+                  </select>
+                </label>
+                <label>
+                  To
+                  <select
+                    [(ngModel)]="suggestedLinkToIdDrafts[i]"
+                    [name]="'sto' + i"
+                    [disabled]="suggestModalBusy"
+                    [title]="fieldHelp.linkTo"
+                  >
+                    <option value="">—</option>
+                    @for (el of pickerElements; track el.id) {
+                      <option [ngValue]="el.id">{{ el.title }}</option>
+                    }
+                  </select>
+                </label>
+              </div>
+              <p class="suggest-original hint">
+                Suggested: <strong>{{ link.fromTitle }}</strong>
                 <span class="rel">{{ formatRelationLabel(link.relationLabel) }}</span>
                 <strong>{{ link.toTitle }}</strong>
-              </div>
+              </p>
               <label class="suggest-rel-edit">
                 Relationship
                 <input
@@ -1225,6 +1365,18 @@
                   [title]="fieldHelp.linkLabel"
                   placeholder="e.g. Located in"
                 />
+              </label>
+              <label class="suggest-detail-field">
+                Relationship detail (optional)
+                <textarea
+                  [(ngModel)]="suggestedLinkDetailDrafts[i]"
+                  [name]="'sdetail' + i"
+                  rows="2"
+                  maxlength="4000"
+                  [disabled]="suggestModalBusy"
+                  [title]="fieldHelp.linkRelationDetail"
+                  placeholder="Nuance for prompts when both entries are linked to a scene"
+                ></textarea>
               </label>
             </div>
           </div>

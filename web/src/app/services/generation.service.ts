@@ -18,9 +18,19 @@ export interface GenerationProgressPayload {
   llmRequest?: string | null;
 }
 
+/** Server defaults for generation UI (GET /api/settings/generation). */
+export interface GenerationDefaultsDto {
+  qualityAcceptMinScore: number;
+  qualityReviewOnlyMinScore: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class GenerationService {
   private readonly http = inject(HttpClient);
+
+  getGenerationDefaults() {
+    return this.http.get<GenerationDefaultsDto>(`${apiBaseUrl}/api/settings/generation`);
+  }
 
   startGeneration(
     sceneId: string,
@@ -28,12 +38,21 @@ export class GenerationService {
       idempotencyKey?: string | null;
       stopAfterDraft?: boolean;
       minWordsOverride?: number | null;
+      /** Skips LLM prose quality loop; compliance still runs. */
+      skipQualityGate?: boolean;
+      /** 0–100; at or above: no automated quality repair. Default from server config. */
+      qualityAcceptMinScore?: number | null;
+      /** 0–100; minimum to pass; between this and accept: pass with annotations only. */
+      qualityReviewOnlyMinScore?: number | null;
     }
   ) {
     return this.http.post<{ id: string }>(`${apiBaseUrl}/api/scenes/${sceneId}/generation`, {
       idempotencyKey: opts?.idempotencyKey ?? null,
       stopAfterDraft: opts?.stopAfterDraft ?? false,
-      minWordsOverride: opts?.minWordsOverride ?? null
+      minWordsOverride: opts?.minWordsOverride ?? null,
+      skipQualityGate: opts?.skipQualityGate ?? false,
+      qualityAcceptMinScore: opts?.qualityAcceptMinScore ?? null,
+      qualityReviewOnlyMinScore: opts?.qualityReviewOnlyMinScore ?? null
     });
   }
 
@@ -51,7 +70,19 @@ export class GenerationService {
     );
   }
 
-  correctDraft(sceneId: string, body: { generationRunId: string; instruction: string }) {
+  correctDraft(
+    sceneId: string,
+    body: {
+      generationRunId: string;
+      instruction: string;
+      /** Full editor draft; sent for context and so selection indices match the textarea. */
+      currentDraftText?: string | null;
+      /** Inclusive start, UTF-16 (same as textarea.selectionStart). */
+      selectionStart?: number | null;
+      /** Exclusive end, UTF-16 (same as textarea.selectionEnd). */
+      selectionEnd?: number | null;
+    }
+  ) {
     return this.http.post(`${apiBaseUrl}/api/scenes/${sceneId}/generation/correct`, body);
   }
 

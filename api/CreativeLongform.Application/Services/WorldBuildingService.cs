@@ -260,12 +260,21 @@ public sealed class WorldBuildingService : IWorldBuildingService
             if (!fromOk || !toOk)
                 continue;
 
+            string? relationDetail = null;
+            if (!string.IsNullOrWhiteSpace(item.RelationDetail))
+            {
+                relationDetail = item.RelationDetail.Trim();
+                if (relationDetail.Length > 4000)
+                    relationDetail = relationDetail[..4000];
+            }
+
             _db.WorldElementLinks.Add(new WorldElementLink
             {
                 Id = Guid.NewGuid(),
                 FromWorldElementId = item.FromWorldElementId,
                 ToWorldElementId = item.ToWorldElementId,
-                RelationLabel = label
+                RelationLabel = label,
+                RelationDetail = relationDetail
             });
             try
             {

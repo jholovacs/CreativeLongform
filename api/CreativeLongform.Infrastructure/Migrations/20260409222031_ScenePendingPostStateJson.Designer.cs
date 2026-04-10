@@ -3,6 +3,7 @@ using System;
 using CreativeLongform.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace CreativeLongform.Infrastructure.Migrations
 {
     [DbContext(typeof(CreativeLongformDbContext))]
-    partial class CreativeLongformDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260409222031_ScenePendingPostStateJson")]
+    partial class ScenePendingPostStateJson
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -151,16 +154,6 @@ namespace CreativeLongform.Infrastructure.Migrations
 
                     b.Property<int?>("MinWordsOverride")
                         .HasColumnType("integer");
-
-                    b.Property<double>("QualityAcceptMinScore")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("double precision")
-                        .HasDefaultValue(75.0);
-
-                    b.Property<double>("QualityReviewOnlyMinScore")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("double precision")
-                        .HasDefaultValue(55.0);
 
                     b.Property<Guid>("SceneId")
                         .HasColumnType("uuid");

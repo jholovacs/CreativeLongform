@@ -1,10 +1,10 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnDestroy, OnInit, inject } from '@angular/core';
+import { Component, ElementRef, OnDestroy, OnInit, ViewChild, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { HubConnection } from '@microsoft/signalr';
 import { forkJoin, Subject } from 'rxjs';
-import { debounceTime, distinctUntilChanged, takeUntil } from 'rxjs/operators';
+import { concatMap, debounceTime, distinctUntilChanged, takeUntil } from 'rxjs/operators';
 import { Book, Chapter, Scene, WorldElement } from '../models/entities';
 import { GenerationService, GenerationProgressPayload } from '../services/generation.service';
 import { ODataService } from '../services/odata.service';
@@ -52,6 +52,8 @@ interface StoredStoryPosition {
   styleUrl: './scene-workflow.component.scss'
 })
 export class SceneWorkflowComponent implements OnInit, OnDestroy {
+  @ViewChild('draftBody') draftBody?: ElementRef<HTMLTextAreaElement>;
+
   /** Native `title` tooltips for form controls. */
   readonly fieldHelp = SCENE_WORKFLOW_FIELD_HELP;
 
@@ -112,10 +114,18 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   draftText = '';
   correctInstruction = '';
   lastStateTableJson: string | null = null;
+  /** Last selection in the draft textarea (survives blur when clicking Correct). End index exclusive (UTF-16). */
+  private savedDraftSelectionStart = 0;
+  private savedDraftSelectionEnd = 0;
+
+  /** Quality critic thresholds (0–100); persisted locally; sent with each generation run. */
+  qualityAcceptMinScore = 75;
+  qualityReviewOnlyMinScore = 55;
 
   private hub: HubConnection | null = null;
 
   private static readonly storyPositionStorageKey = 'clf.sceneWorkflow.storyPosition';
+  private static readonly qualityThresholdsStorageKey = 'clf.sceneWorkflow.qualityThresholds';
 
   private readonly destroy$ = new Subject<void>();
   private readonly worldElementsSearch$ = new Subject<string>();
@@ -134,6 +144,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
         this.modalWorldSkip = 0;
         this.loadModalWorldPage();
       });
+    this.loadQualityThresholds();
     this.loadBooks();
   }
 
@@ -283,6 +294,8 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.selectedChapterId = ch?.id ?? '';
     const sc = ch?.scenes?.[0];
     this.selectedSceneId = sc?.id ?? '';
+    this.awaitingReview = false;
+    this.generationRunId = null;
     this.worldElementsSkip = 0;
     this.worldElementsSearchQuery = '';
     this.persistStoryPosition();
@@ -294,6 +307,8 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   onChapterChange(): void {
     const sc = this.scenesForChapter()[0];
     this.selectedSceneId = sc?.id ?? '';
+    this.awaitingReview = false;
+    this.generationRunId = null;
     this.worldElementsSkip = 0;
     this.worldElementsSearchQuery = '';
     this.persistStoryPosition();
@@ -303,6 +318,8 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   }
 
   onSceneChange(): void {
+    this.awaitingReview = false;
+    this.generationRunId = null;
     this.worldElementsSkip = 0;
     this.persistStoryPosition();
     this.syncFormFromScene();
@@ -407,6 +424,8 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
       this.narrativePerspective = '';
       this.narrativeTense = '';
       this.beginningStateJson = '';
+      this.draftText = '';
+      this.lastStateTableJson = null;
       this.chapterComplete = false;
       return;
     }
@@ -418,9 +437,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.beginningStateJson = s.beginningStateJson ?? '';
     this.draftText = s.latestDraftText ?? '';
     this.chapterComplete = ch?.isComplete ?? false;
-    this.awaitingReview = false;
-    this.generationRunId = null;
-    this.lastStateTableJson = s.approvedStateTableJson ?? null;
+    this.lastStateTableJson = s.pendingPostStateJson ?? s.approvedStateTableJson ?? null;
     this.applyPanelDefaultsFromPersistedSceneFields(s);
   }
 
@@ -852,6 +869,66 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.generationLogModalOpen = false;
   }
 
+  private loadQualityThresholds(): void {
+    const stored = this.readQualityThresholdsFromStorage();
+    if (stored) {
+      this.qualityAcceptMinScore = stored.accept;
+      this.qualityReviewOnlyMinScore = stored.review;
+      return;
+    }
+    this.generation.getGenerationDefaults().subscribe({
+      next: (s) => {
+        this.qualityAcceptMinScore = s.qualityAcceptMinScore;
+        this.qualityReviewOnlyMinScore = s.qualityReviewOnlyMinScore;
+      },
+      error: () => {
+        /* keep constructor defaults */
+      }
+    });
+  }
+
+  private readQualityThresholdsFromStorage(): { accept: number; review: number } | null {
+    try {
+      const raw = globalThis.localStorage?.getItem(SceneWorkflowComponent.qualityThresholdsStorageKey);
+      if (!raw) return null;
+      const o = JSON.parse(raw) as { qualityAcceptMinScore?: unknown; qualityReviewOnlyMinScore?: unknown };
+      if (typeof o.qualityAcceptMinScore !== 'number' || typeof o.qualityReviewOnlyMinScore !== 'number') {
+        return null;
+      }
+      return {
+        accept: SceneWorkflowComponent.clampQualityScore(o.qualityAcceptMinScore),
+        review: SceneWorkflowComponent.clampQualityScore(o.qualityReviewOnlyMinScore)
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private persistQualityThresholds(): void {
+    try {
+      globalThis.localStorage?.setItem(
+        SceneWorkflowComponent.qualityThresholdsStorageKey,
+        JSON.stringify({
+          qualityAcceptMinScore: this.qualityAcceptMinScore,
+          qualityReviewOnlyMinScore: this.qualityReviewOnlyMinScore
+        })
+      );
+    } catch {
+      /* ignore quota */
+    }
+  }
+
+  onQualityThresholdsChange(): void {
+    this.qualityAcceptMinScore = SceneWorkflowComponent.clampQualityScore(this.qualityAcceptMinScore);
+    this.qualityReviewOnlyMinScore = SceneWorkflowComponent.clampQualityScore(this.qualityReviewOnlyMinScore);
+    this.persistQualityThresholds();
+  }
+
+  private static clampQualityScore(n: number): number {
+    if (typeof n !== 'number' || Number.isNaN(n)) return 75;
+    return Math.min(100, Math.max(0, n));
+  }
+
   copyGenLogTextToClipboard(text: string | null | undefined): void {
     const t = text?.trim() ?? '';
     if (!t) return;
@@ -878,7 +955,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
       runId: '',
       step: 'start',
       detail:
-        'Starting generation (draft review mode, target ~1500–2000 words). Waiting for server run id and live progress…',
+        'Saving scene world links, then starting generation (draft review mode, target ~1500–2000 words). Waiting for server run id…',
       elapsedMs: 0,
       stepDurationMs: null,
       llmPreview: null
@@ -886,8 +963,21 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.awaitingReview = false;
     this.generationRunId = null;
     void this.hub?.stop();
-    this.generation
-      .startGeneration(this.selectedSceneId, { stopAfterDraft: true, minWordsOverride: 1500 })
+
+    const sceneId = this.selectedSceneId;
+    this.onQualityThresholdsChange();
+    this.world
+      .putSceneWorldElements(sceneId, [...this.selectedWorldIds])
+      .pipe(
+        concatMap(() =>
+          this.generation.startGeneration(sceneId, {
+            stopAfterDraft: true,
+            minWordsOverride: 1500,
+            qualityAcceptMinScore: this.qualityAcceptMinScore,
+            qualityReviewOnlyMinScore: this.qualityReviewOnlyMinScore
+          })
+        )
+      )
       .subscribe({
         next: (res) => {
           this.generationRunId = res.id;
@@ -905,7 +995,8 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
           });
         },
         error: (e) => {
-          this.error = e?.error?.message ?? e?.message ?? 'Generation failed';
+          this.error =
+            e?.error?.message ?? e?.message ?? 'Could not save scene world links or start generation';
           this.busy = false;
           this.pushProgressEvent('Local', {
             runId: '',
@@ -971,14 +1062,26 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
         next: (res) => {
           this.lastStateTableJson = res.stateTableJson;
           this.awaitingReview = false;
+          this.generationRunId = null;
           this.busy = false;
           this.loadBooks();
         },
         error: (e) => {
-          this.error = e?.error?.message ?? e?.message ?? 'Finalize failed';
+          const body = e?.error as { message?: string; detail?: string } | undefined;
+          this.error =
+            body?.message && body?.detail
+              ? `${body.message} ${body.detail}`
+              : body?.message ?? e?.message ?? 'Finalize failed';
           this.busy = false;
         }
       });
+  }
+
+  onDraftBlur(): void {
+    const ta = this.draftBody?.nativeElement;
+    if (!ta) return;
+    this.savedDraftSelectionStart = ta.selectionStart;
+    this.savedDraftSelectionEnd = ta.selectionEnd;
   }
 
   runCorrect(): void {
@@ -990,26 +1093,48 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     }
     this.busy = true;
     this.error = null;
-    this.generation
-      .correctDraft(this.selectedSceneId, { generationRunId: this.generationRunId, instruction: ins })
-      .subscribe({
-        next: () => {
-          this.correctInstruction = '';
-          this.odata.getBooksWithScenes().subscribe({
-            next: (res) => {
-              this.books = res.value ?? [];
-              this.syncFormFromScene();
-              this.busy = false;
-            },
-            error: () => {
-              this.busy = false;
-            }
-          });
-        },
-        error: (e) => {
-          this.error = e?.error?.message ?? e?.message ?? 'Correction failed';
-          this.busy = false;
-        }
-      });
+    const ta = this.draftBody?.nativeElement;
+    let selectionStart: number | undefined;
+    let selectionEnd: number | undefined;
+    if (ta && document.activeElement === ta && ta.selectionStart !== ta.selectionEnd) {
+      selectionStart = ta.selectionStart;
+      selectionEnd = ta.selectionEnd;
+    } else {
+      const len = this.draftText.length;
+      const s = Math.min(this.savedDraftSelectionStart, len);
+      const e = Math.min(this.savedDraftSelectionEnd, len);
+      if (s >= 0 && e <= len && s < e) {
+        selectionStart = s;
+        selectionEnd = e;
+      }
+    }
+    const body: Parameters<GenerationService['correctDraft']>[1] = {
+      generationRunId: this.generationRunId,
+      instruction: ins,
+      currentDraftText: this.draftText
+    };
+    if (selectionStart !== undefined && selectionEnd !== undefined) {
+      body.selectionStart = selectionStart;
+      body.selectionEnd = selectionEnd;
+    }
+    this.generation.correctDraft(this.selectedSceneId, body).subscribe({
+      next: () => {
+        this.correctInstruction = '';
+        this.odata.getBooksWithScenes().subscribe({
+          next: (res) => {
+            this.books = res.value ?? [];
+            this.syncFormFromScene();
+            this.busy = false;
+          },
+          error: () => {
+            this.busy = false;
+          }
+        });
+      },
+      error: (e) => {
+        this.error = e?.error?.message ?? e?.message ?? 'Correction failed';
+        this.busy = false;
+      }
+    });
   }
 }

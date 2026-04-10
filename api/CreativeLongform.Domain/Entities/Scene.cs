@@ -19,6 +19,8 @@ public class Scene
     public string? BeginningStateJson { get; set; }
     /// <summary>Last approved end-state JSON for this scene (after user accepts generation).</summary>
     public string? ApprovedStateTableJson { get; set; }
+    /// <summary>Latest LLM-derived post-scene state from draft review (not yet finalized); cleared when the user finalizes or starts a new run.</summary>
+    public string? PendingPostStateJson { get; set; }
     /// <summary>Optional notes on how the scene should end (state / beats).</summary>
     public string? ExpectedEndStateNotes { get; set; }
     /// <summary>Last successful or in-progress draft text.</summary>
