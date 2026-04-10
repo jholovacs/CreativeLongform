@@ -36,6 +36,9 @@ export const SCENE_WORKFLOW_FIELD_HELP = {
 
   suggestModalClose: 'Close without applying changes.',
 
+  suggestImprovements:
+    'Runs a separate LLM pass that lists optional paragraph-level suggestions. Nothing is applied until you click Apply or use an instruction with Correct.',
+
   cancelGeneration:
     'Stop this draft run after the current LLM step. Use if the model is going in the wrong direction; you can generate again.',
 

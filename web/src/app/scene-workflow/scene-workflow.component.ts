@@ -5,10 +5,11 @@ import { RouterLink } from '@angular/router';
 import { HubConnection } from '@microsoft/signalr';
 import { forkJoin, Subject } from 'rxjs';
 import { concatMap, debounceTime, distinctUntilChanged, takeUntil } from 'rxjs/operators';
+import { applyParagraphReplace } from '../core/draft-paragraph';
 import { Book, Chapter, Scene, WorldElement } from '../models/entities';
 import { GenerationService, GenerationProgressPayload } from '../services/generation.service';
 import { ODataService } from '../services/odata.service';
-import { SceneWorkflowService } from '../services/scene-workflow.service';
+import { DraftRecommendationItem, SceneWorkflowService } from '../services/scene-workflow.service';
 import { WorldService } from '../services/world.service';
 import { UiIconComponent } from '../shared/ui-icon.component';
 import { SCENE_WORKFLOW_FIELD_HELP } from './scene-workflow-field-help';
@@ -116,6 +117,12 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   draftText = '';
   correctInstruction = '';
   lastStateTableJson: string | null = null;
+
+  /** LLM draft analysis (on-demand); proposals are not auto-applied. */
+  draftRecommendations: DraftRecommendationItem[] = [];
+  recommendationsBusy = false;
+  recommendationsError: string | null = null;
+  private static readonly maxDraftCharsForAnalysis = 100_000;
   /** Last selection in the draft textarea (survives blur when clicking Correct). End index exclusive (UTF-16). */
   private savedDraftSelectionStart = 0;
   private savedDraftSelectionEnd = 0;
@@ -319,6 +326,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.selectedChapterId = ch?.id ?? '';
     const sc = ch?.scenes?.[0];
     this.selectedSceneId = sc?.id ?? '';
+    this.clearDraftRecommendations();
     this.awaitingReview = false;
     this.generationRunId = null;
     this.worldElementsSkip = 0;
@@ -332,6 +340,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   onChapterChange(): void {
     const sc = this.scenesForChapter()[0];
     this.selectedSceneId = sc?.id ?? '';
+    this.clearDraftRecommendations();
     this.awaitingReview = false;
     this.generationRunId = null;
     this.worldElementsSkip = 0;
@@ -343,6 +352,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   }
 
   onSceneChange(): void {
+    this.clearDraftRecommendations();
     this.awaitingReview = false;
     this.generationRunId = null;
     this.worldElementsSkip = 0;
@@ -842,6 +852,16 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     return `${m}m ${r.toFixed(0)}s`;
   }
 
+  /** SignalR / server event names (PascalCase) → spaced words for the log badge. */
+  formatEventBadgeLabel(name: string): string {
+    if (!name) return '';
+    return name
+      .replace(/_/g, ' ')
+      .replace(/([a-z\d])([A-Z])/g, '$1 $2')
+      .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+      .trim();
+  }
+
   private nextLogId(): string {
     return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
   }
@@ -854,9 +874,15 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
         ? `LLM · ${stepLabel}`
         : eventName === 'RunStarted'
           ? 'Pipeline started'
-          : eventName === 'Local'
-            ? 'Status'
-            : stepLabel;
+          : eventName === 'AgentEditTurn'
+            ? 'Agent edit'
+            : eventName === 'RepairDraftApplied'
+              ? 'Repair — draft updated'
+              : eventName === 'DraftReviewNote'
+                ? 'Compliance / quality note'
+                : eventName === 'Local'
+                ? 'Status'
+                : stepLabel;
     const detail = (p.detail ?? '').trim();
     const entry: GenerationLogEntry = {
       id: this.nextLogId(),
@@ -880,7 +906,10 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
       case 'AgentEditTurn':
         return 'agent';
       case 'RepairAttempt':
+      case 'RepairDraftApplied':
         return 'repair';
+      case 'DraftReviewNote':
+        return 'phase';
       case 'RunStarted':
       case 'RunFinished':
         return 'run';
@@ -1038,6 +1067,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
       stepDurationMs: null,
       llmPreview: null
     });
+    this.clearDraftRecommendations();
     this.awaitingReview = false;
     this.generationRunId = null;
     void this.hub?.stop();
@@ -1124,6 +1154,70 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     });
   }
 
+  clearDraftRecommendations(): void {
+    this.draftRecommendations = [];
+    this.recommendationsError = null;
+    this.recommendationsBusy = false;
+  }
+
+  get draftTooLongForAnalysis(): boolean {
+    return this.draftText.length > SceneWorkflowComponent.maxDraftCharsForAnalysis;
+  }
+
+  loadDraftRecommendations(): void {
+    if (!this.selectedSceneId || !this.draftText.trim()) {
+      this.error = 'Need draft text to analyze.';
+      return;
+    }
+    if (this.draftTooLongForAnalysis) {
+      this.error = `Draft exceeds ${SceneWorkflowComponent.maxDraftCharsForAnalysis.toLocaleString()} characters (analysis limit).`;
+      return;
+    }
+    this.recommendationsBusy = true;
+    this.recommendationsError = null;
+    this.error = null;
+    this.sceneWorkflow.getDraftRecommendations(this.selectedSceneId, this.draftText).subscribe({
+      next: (res) => {
+        this.draftRecommendations = res.items ?? [];
+        this.recommendationsBusy = false;
+      },
+      error: (err: unknown) => {
+        this.recommendationsBusy = false;
+        const e = err as { error?: { message?: string } | string; message?: string };
+        const body = e?.error;
+        this.recommendationsError =
+          typeof body === 'string'
+            ? body
+            : body && typeof body === 'object' && 'message' in body
+              ? String((body as { message: string }).message)
+              : e?.message ?? 'Request failed.';
+      }
+    });
+  }
+
+  applyRecommendationReplace(index: number): void {
+    const item = this.draftRecommendations[index];
+    if (!item || item.kind !== 'replace' || !item.replacementText?.trim()) return;
+    this.draftText = applyParagraphReplace(
+      this.draftText,
+      item.paragraphStart,
+      item.paragraphEnd,
+      item.replacementText
+    );
+    this.dismissRecommendationAt(index);
+  }
+
+  useRewriteInstruction(index: number): void {
+    const item = this.draftRecommendations[index];
+    if (!item || item.kind !== 'rewrite' || !item.rewriteInstruction?.trim()) return;
+    this.correctInstruction = item.rewriteInstruction.trim();
+    this.dismissRecommendationAt(index);
+  }
+
+  dismissRecommendationAt(index: number): void {
+    this.draftRecommendations = this.draftRecommendations.filter((_, i) => i !== index);
+  }
+
   finalizeDraft(): void {
     if (!this.selectedSceneId || !this.generationRunId) return;
     this.busy = true;
@@ -1140,6 +1234,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
           this.awaitingReview = false;
           this.generationRunId = null;
           this.busy = false;
+          this.clearDraftRecommendations();
           this.loadBooks(res.nextSceneId ?? undefined);
         },
         error: () => {

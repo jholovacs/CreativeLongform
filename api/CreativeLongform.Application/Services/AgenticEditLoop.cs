@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Tasks;
 using CreativeLongform.Application.Abstractions;
 using CreativeLongform.Application.Generation;
 using CreativeLongform.Domain.Enums;
@@ -14,10 +16,11 @@ namespace CreativeLongform.Application.Services;
 public static class AgenticEditLoop
 {
     private const int FullDraftCharBudget = 60_000;
-    private const int SummaryPrefixChars = 140;
+    private const int SummaryPrefixChars = 400;
     private const int MaxReplacementChars = 80_000;
     /// <summary>Max chars of raw JSON sent on SignalR as llmPreview (full response is always persisted on the generation run LLM call log).</summary>
     private const int ProgressLlmPreviewMaxChars = 500_000;
+    private const int ProgressPatchExcerptChars = 7000;
 
     private static readonly string SystemPrompt = """
         You are a fiction editor agent refining a scene draft. You improve clarity, pacing, and alignment with instructions using tools.
@@ -25,15 +28,18 @@ public static class AgenticEditLoop
 
         Tools:
         - { "action": "read_section", "paragraphStart": <int>, "paragraphEnd": <int> } — inclusive paragraph indices (0..N-1). Use to read full text when the draft view is summarized.
-        - { "action": "propose_patch", "paragraphStart": <int>, "paragraphEnd": <int>, "replacement": "<prose>" } — replace inclusive range with new prose. Replacement may use blank lines to split into multiple paragraphs.
+        - { "action": "propose_patch", "paragraphStart": <int>, "paragraphEnd": <int>, "replacement": "<prose>", "reason": "<why this edit>" } — replace inclusive range with new prose. Include "reason" (one or two sentences: what you are improving and why). Replacement may use blank lines to split into multiple paragraphs.
         - { "action": "finish", "reason": "<short reason>" } — the draft is acceptable; stop editing.
 
         Rules:
         - Prefer small targeted patches; avoid rewriting the whole scene unless necessary.
         - Preserve continuity, voice, and facts implied by scene instructions and world context.
+        - CONTENT PRESERVATION (non-negotiable): Every propose_patch replacement MUST keep all plot-critical substance from the replaced paragraphs—reveals, twists, decisions, stakes, foreshadowing, on-page events, dialogue commitments, and causal links. Do not "tighten" or "streamline" by deleting story beats, compressing scenes into summary, or replacing dramatized moments with abstract narration. If you cannot improve wording without losing any of that substance, use finish instead.
+        - Patches are line edits: same story, clearer or more vivid prose. Never substitute a shorter synopsis of events for the original prose.
         - Show, don't tell: patches should add or refine concrete action, dialogue, and sensory detail; avoid replacing dramatized beats with abstract emotional labels or explanatory narration unless the author instruction requires it.
         - Reference variety: do not lean on repeating characters' full names every time they appear. Mix in relationship to the viewpoint character (e.g. "her brother", "the detective"), role or attitude from the POV ("the woman who'd lied to him"), physical or situational anchors ("the man at the bar"), and occasional name use for clarity—especially on first introduction or when many people are in the scene.
         - HARD CONSTRAINT: Do not introduce named characters, relationships, or plot events not already allowed by the scene synopsis/instructions and the Linked world-building / relationship text in the user message. Do not invent story beats to "improve" the scene.
+        - Summarized draft view: you only see short previews per paragraph. You MUST call read_section on a prior turn for an inclusive range that fully covers any paragraph range before you propose_patch that same range (the server enforces this). Do not patch blind.
         - Indices always refer to the CURRENT draft shown in the message (after any prior patches in this session).
         """;
 
@@ -54,10 +60,12 @@ public static class AgenticEditLoop
         if (paragraphs.Count == 0)
             return initialDraft;
 
+        var readRanges = new List<(int start, int end)>();
         string? lastToolResult = null;
         for (var turn = 1; turn <= maxTurns; turn++)
         {
             var numbered = BuildParagraphReference(paragraphs);
+            var paragraphingWarning = BuildParagraphingWarning(paragraphs);
             var user = BuildUserMessage(
                 sceneInstructions,
                 expectedEndNotes,
@@ -66,7 +74,8 @@ public static class AgenticEditLoop
                 maxTurns,
                 paragraphs.Count,
                 numbered,
-                lastToolResult);
+                lastToolResult,
+                paragraphingWarning);
 
             var turnSw = Stopwatch.StartNew();
             var (raw, _) = await chatJsonAsync(SystemPrompt, user, cancellationToken);
@@ -105,17 +114,17 @@ public static class AgenticEditLoop
             }
 
             var kind = action.Action.Trim().ToLowerInvariant();
-            var detail = kind == "finish"
-                ? $"Turn {turn}/{maxTurns}: editor finished — {Truncate(action.Reason ?? "(no reason)", 200)} (LLM {turnSw.ElapsedMilliseconds} ms)"
-                : $"Turn {turn}/{maxTurns}: tool action «{kind}» (LLM {turnSw.ElapsedMilliseconds} ms)";
-            await notifier.NotifyAsync(runId, "AgentEditTurn", nameof(PipelineStep.AgentEdit), detail, cancellationToken,
-                pipelineElapsedMs(), turnSw.ElapsedMilliseconds, Truncate(cleaned, ProgressLlmPreviewMaxChars),
-                SerializeAgentLlmPrompt(SystemPrompt, user));
+            var llmPreview = Truncate(cleaned, ProgressLlmPreviewMaxChars);
+            var llmRequest = SerializeAgentLlmPrompt(SystemPrompt, user);
 
             switch (kind)
             {
                 case "finish":
                     logger.LogInformation("Agentic edit finished at turn {Turn}: {Reason}", turn, action.Reason ?? "");
+                    await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
+                        turnSw.ElapsedMilliseconds,
+                        $"Editor finished (agent pass). Why: {Truncate(action.Reason ?? "(no reason)", 400)}",
+                        llmPreview, llmRequest);
                     return JoinParagraphs(paragraphs);
 
                 case "read_section":
@@ -123,6 +132,8 @@ public static class AgenticEditLoop
                     if (action.ParagraphStart is not { } rs || action.ParagraphEnd is not { } re)
                     {
                         lastToolResult = "Error: read_section requires paragraphStart and paragraphEnd (inclusive).";
+                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
+                            turnSw.ElapsedMilliseconds, $"read_section failed — {lastToolResult}", llmPreview, llmRequest);
                         break;
                     }
 
@@ -130,12 +141,19 @@ public static class AgenticEditLoop
                     {
                         lastToolResult =
                             $"Error: invalid range {rs}..{re} for draft with {paragraphs.Count} paragraphs (valid indices 0..{paragraphs.Count - 1}).";
+                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
+                            turnSw.ElapsedMilliseconds, $"read_section failed — {lastToolResult}", llmPreview, llmRequest);
                         break;
                     }
 
                     var slice = paragraphs.Skip(rs).Take(re - rs + 1).ToList();
                     var body = JoinParagraphs(slice);
+                    readRanges.Add((rs, re));
                     lastToolResult = $"read_section result (paragraphs {rs}..{re}):\n{body}";
+                    await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
+                        turnSw.ElapsedMilliseconds,
+                        $"read_section — requested full text for paragraphs {rs}..{re} (inclusive).\nWhy: inspect or prepare before editing.\n\n{Truncate(body, 12_000)}",
+                        llmPreview, llmRequest);
                     break;
                 }
 
@@ -144,6 +162,8 @@ public static class AgenticEditLoop
                     if (action.ParagraphStart is not { } ps || action.ParagraphEnd is not { } pe)
                     {
                         lastToolResult = "Error: propose_patch requires paragraphStart and paragraphEnd (inclusive).";
+                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
+                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmPreview, llmRequest);
                         break;
                     }
 
@@ -151,6 +171,17 @@ public static class AgenticEditLoop
                     {
                         lastToolResult =
                             $"Error: invalid range {ps}..{pe} for draft with {paragraphs.Count} paragraphs (valid indices 0..{paragraphs.Count - 1}).";
+                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
+                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmPreview, llmRequest);
+                        break;
+                    }
+
+                    if (ShouldUseSummary(paragraphs) && !IsRangeCoveredByReads(ps, pe, readRanges))
+                    {
+                        lastToolResult =
+                            $"Error: summarized draft view only shows previews. On a prior turn, call read_section with a range that fully covers {ps}..{pe} (inclusive) before propose_patch. Then patch the same indices.";
+                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
+                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmPreview, llmRequest);
                         break;
                     }
 
@@ -158,6 +189,8 @@ public static class AgenticEditLoop
                     if (string.IsNullOrWhiteSpace(replacement))
                     {
                         lastToolResult = "Error: propose_patch requires non-empty replacement.";
+                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
+                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmPreview, llmRequest);
                         break;
                     }
 
@@ -165,6 +198,23 @@ public static class AgenticEditLoop
                     {
                         lastToolResult =
                             $"Error: replacement exceeds {MaxReplacementChars} characters.";
+                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
+                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmPreview, llmRequest);
+                        break;
+                    }
+
+                    var originalSpan = JoinParagraphs(paragraphs.Skip(ps).Take(pe - ps + 1).ToList());
+                    var originalWords = CountWords(originalSpan);
+                    var replacementWords = CountWords(replacement);
+                    if (originalWords >= 50 && replacementWords < originalWords * 0.55)
+                    {
+                        logger.LogWarning(
+                            "Agentic edit: rejected patch for excessive shortening ({OriginalWords} -> {ReplacementWords} words)",
+                            originalWords, replacementWords);
+                        lastToolResult =
+                            $"Error: replacement is much shorter than the replaced span (~{originalWords} words vs ~{replacementWords}). You must preserve plot and on-page events—tighten wording without deleting beats, or use finish.";
+                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
+                            turnSw.ElapsedMilliseconds, $"propose_patch rejected — {lastToolResult}", llmPreview, llmRequest);
                         break;
                     }
 
@@ -176,16 +226,24 @@ public static class AgenticEditLoop
                     {
                         logger.LogWarning(ex, "Agentic edit patch failed");
                         lastToolResult = $"Error applying patch: {ex.Message}";
+                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
+                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmPreview, llmRequest);
                         break;
                     }
 
+                    readRanges.Clear();
                     lastToolResult =
                         $"propose_patch applied: replaced paragraphs {ps}..{pe}. Draft now has {paragraphs.Count} paragraphs.";
+                    var patchDetail = BuildProposePatchProgressDetail(ps, pe, action.Reason, originalSpan, replacement);
+                    await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
+                        turnSw.ElapsedMilliseconds, patchDetail, llmPreview, llmRequest);
                     break;
                 }
 
                 default:
                     lastToolResult = $"Error: unknown action \"{action.Action}\". Use read_section, propose_patch, or finish.";
+                    await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
+                        turnSw.ElapsedMilliseconds, lastToolResult, llmPreview, llmRequest);
                     break;
             }
         }
@@ -276,7 +334,8 @@ public static class AgenticEditLoop
         int maxTurns,
         int paragraphCount,
         string numberedReference,
-        string? lastToolResult)
+        string? lastToolResult,
+        string? paragraphingWarning)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Turn {turn} of {maxTurns} (draft has {paragraphCount} paragraphs, indices 0..{Math.Max(0, paragraphCount - 1)}).");
@@ -297,8 +356,75 @@ public static class AgenticEditLoop
             sb.AppendLine();
         }
 
+        if (!string.IsNullOrEmpty(paragraphingWarning))
+        {
+            sb.AppendLine(paragraphingWarning);
+            sb.AppendLine();
+        }
+
         sb.AppendLine("Current draft (paragraph-index reference):");
         sb.AppendLine(numberedReference);
+        return sb.ToString();
+    }
+
+    private static string? BuildParagraphingWarning(IReadOnlyList<string> paragraphs)
+    {
+        if (paragraphs.Count != 1)
+            return null;
+        if (paragraphs[0].Length <= 1500)
+            return null;
+        return """
+            INDEXING NOTE: The draft is ONE paragraph [0] (no blank lines between blocks). Replacing [0,0] replaces the ENTIRE scene.
+            If you only mean to edit part of the text, you still must replace [0,0] but your replacement must include ALL original plot and events—never a shortened version.
+            """;
+    }
+
+    private static bool IsRangeCoveredByReads(int patchStart, int patchEnd, List<(int start, int end)> reads)
+    {
+        foreach (var (rs, re) in reads)
+        {
+            if (rs <= patchStart && re >= patchEnd)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static int CountWords(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s))
+            return 0;
+        return s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+    }
+
+    private static async Task NotifyAgentEditProgressAsync(
+        IGenerationProgressNotifier notifier,
+        Guid runId,
+        Func<long> pipelineElapsedMs,
+        CancellationToken cancellationToken,
+        int turn,
+        int maxTurns,
+        long turnMs,
+        string detailBody,
+        string? llmPreview,
+        string? llmRequest)
+    {
+        var detail = $"Turn {turn}/{maxTurns}: {detailBody}";
+        await notifier.NotifyAsync(runId, "AgentEditTurn", nameof(PipelineStep.AgentEdit),
+            detail, cancellationToken, pipelineElapsedMs(), turnMs, llmPreview, llmRequest);
+    }
+
+    private static string BuildProposePatchProgressDetail(int ps, int pe, string? reason, string originalSpan, string replacement)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("propose_patch — change applied.");
+        sb.AppendLine($"Requested: replace paragraphs {ps}..{pe} (inclusive).");
+        sb.AppendLine(
+            $"Why: {(string.IsNullOrWhiteSpace(reason) ? "(author model did not provide \"reason\")" : reason.Trim())}");
+        sb.AppendLine("Previous text:");
+        sb.AppendLine(Truncate(originalSpan, ProgressPatchExcerptChars));
+        sb.AppendLine("New text:");
+        sb.AppendLine(Truncate(replacement, ProgressPatchExcerptChars));
         return sb.ToString();
     }
 

@@ -35,8 +35,8 @@ public sealed class OllamaOptions
     /// <summary>If the first draft is shorter than DraftMinWords, run one expansion pass.</summary>
     public bool DraftExpandIfShort { get; set; } = true;
 
-    /// <summary>Run agentic paragraph-level edit loop after the initial draft (before post-state).</summary>
-    public bool AgenticEditEnabled { get; set; } = true;
+    /// <summary>Run autonomous agentic paragraph-level edit loop after the initial draft (before post-state). Off by default; use on-demand draft recommendations in the UI instead.</summary>
+    public bool AgenticEditEnabled { get; set; } = false;
 
     /// <summary>Max LLM turns in the agentic edit loop (each turn is one tool JSON response).</summary>
     public int AgenticEditMaxTurns { get; set; } = 8;

@@ -9,7 +9,8 @@
     <h1>Scene Workflow</h1>
     <p class="subtitle">
       Choose where you are in the story, write a synopsis, link world elements, set voice (perspective / tense), then generate a
-      draft with live progress. Review the prose, finalize to build the end-state table, and mark the chapter complete when ready.
+      draft with live progress. Optionally ask for suggested improvements (you choose what to apply), then finalize to build the
+      end-state table and mark the chapter complete when ready.
     </p>
     @if (selectedBookId) {
       <p class="meta">
@@ -597,8 +598,9 @@
           </summary>
           <div class="collapsible-inner">
             <p class="hint">
-              Edit the text below, ask the model to correct a section, or finalize to build the end-state narrative table. With text
-              selected, the correction applies only to that selection (the full draft is still sent for context).
+              The pipeline generates a draft first (no automatic editor pass). Edit freely, use <strong>Suggest improvements</strong>
+              for optional LLM analysis and proposals, run <strong>Correct With LLM</strong> when you want a targeted revision, or
+              finalize to build the end-state table. With text selected, correction applies only to that selection.
             </p>
             <label for="draft-body">Draft Text</label>
             <textarea
@@ -610,6 +612,61 @@
               [disabled]="busy"
               (blur)="onDraftBlur()"
             ></textarea>
+
+            <div class="draft-rec-toolbar">
+              <button
+                type="button"
+                class="btn-with-icon"
+                (click)="loadDraftRecommendations()"
+                [disabled]="busy || recommendationsBusy || draftTooLongForAnalysis || !draftText.trim()"
+                [title]="fieldHelp.suggestImprovements"
+              >
+                <app-ui-icon name="sparkles" />
+                @if (recommendationsBusy) {
+                  Analyzing…
+                } @else {
+                  Suggest improvements (LLM)
+                }
+              </button>
+              @if (draftTooLongForAnalysis) {
+                <span class="draft-rec-limit">Analysis limit: 100,000 characters.</span>
+              }
+            </div>
+            @if (recommendationsError) {
+              <p class="inline-msg draft-rec-err">{{ recommendationsError }}</p>
+            }
+            @if (draftRecommendations.length > 0) {
+              <div class="draft-rec-list" role="region" aria-label="Suggested draft edits">
+                <h4 class="draft-rec-heading">Suggested edits</h4>
+                @for (item of draftRecommendations; track $index) {
+                  <div class="draft-rec-card">
+                    <div class="draft-rec-meta">
+                      <span class="draft-rec-kind">{{ item.kind }}</span>
+                      <span class="draft-rec-range">Paragraphs {{ item.paragraphStart }}–{{ item.paragraphEnd }}</span>
+                    </div>
+                    <p class="draft-rec-problem">{{ item.problem }}</p>
+                    @if (item.kind === 'replace' && item.replacementText) {
+                      <pre class="draft-rec-preview">{{ item.replacementText }}</pre>
+                    }
+                    @if (item.kind === 'rewrite' && item.rewriteInstruction) {
+                      <p class="draft-rec-instruction"><strong>Instruction:</strong> {{ item.rewriteInstruction }}</p>
+                    }
+                    <div class="draft-rec-card-actions">
+                      @if (item.kind === 'replace') {
+                        <button type="button" class="primary" (click)="applyRecommendationReplace($index)">
+                          Apply replacement
+                        </button>
+                      }
+                      @if (item.kind === 'rewrite') {
+                        <button type="button" (click)="useRewriteInstruction($index)">Use for Correct With LLM</button>
+                      }
+                      <button type="button" class="draft-rec-dismiss" (click)="dismissRecommendationAt($index)">Dismiss</button>
+                    </div>
+                  </div>
+                }
+              </div>
+            }
+
             <div class="review-actions">
               <label class="correct-row">
                 Correction Instruction
@@ -797,7 +854,8 @@
         </button>
       </div>
       <p class="hint">
-        Live updates from the server: pipeline phases, each LLM call (with response preview and timings), and agent / repair steps.
+        Live updates from the server: pipeline phases, each LLM call (with response preview and timings), agent edits (what
+        changed and why), compliance/quality repairs (requested fixes and revised draft excerpts), and timings.
       </p>
       <div
         class="gen-log-scroll"
@@ -810,7 +868,7 @@
           <article [class]="'gen-log-entry kind-' + entry.kind">
             <div class="gen-log-meta">
               <span class="gen-log-time">{{ entry.at | date : 'mediumTime' }}</span>
-              <span class="gen-log-badge">{{ entry.eventName }}</span>
+              <span class="gen-log-badge">{{ formatEventBadgeLabel(entry.eventName) }}</span>
               @if (entry.elapsedMs != null) {
                 <span class="gen-log-elapsed" title="Elapsed since pipeline start">Run {{ formatDuration(entry.elapsedMs) }}</span>
               }

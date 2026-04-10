@@ -1,4 +1,6 @@
+using System.Net.Http;
 using CreativeLongform.Application.Abstractions;
+using CreativeLongform.Application.DraftRecommendation;
 using CreativeLongform.Domain.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -11,11 +13,49 @@ public sealed class SceneWorkflowController : ControllerBase
 {
     private readonly ICreativeLongformDbContext _db;
     private readonly IWorldBuildingService _worldBuilding;
+    private readonly IDraftRecommendationService _draftRecommendations;
 
-    public SceneWorkflowController(ICreativeLongformDbContext db, IWorldBuildingService worldBuilding)
+    public SceneWorkflowController(
+        ICreativeLongformDbContext db,
+        IWorldBuildingService worldBuilding,
+        IDraftRecommendationService draftRecommendations)
     {
         _db = db;
         _worldBuilding = worldBuilding;
+        _draftRecommendations = draftRecommendations;
+    }
+
+    [HttpPost("scenes/{sceneId:guid}/draft/recommendations")]
+    public async Task<ActionResult<DraftRecommendationResultDto>> GetDraftRecommendations(
+        Guid sceneId,
+        [FromBody] DraftRecommendationsRequest? body,
+        CancellationToken cancellationToken)
+    {
+        if (body is null || string.IsNullOrWhiteSpace(body.DraftText))
+            return BadRequest("draftText is required.");
+
+        try
+        {
+            var result = await _draftRecommendations.GetRecommendationsAsync(sceneId, body.DraftText, cancellationToken);
+            return Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            if (ex.Message.Contains("Scene not found", StringComparison.Ordinal))
+                return NotFound(ex.Message);
+            if (ex.Message.Contains("valid recommendation JSON", StringComparison.Ordinal))
+                return StatusCode(StatusCodes.Status502BadGateway, new { message = ex.Message });
+            return BadRequest(ex.Message);
+        }
+        catch (HttpRequestException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { message = "Language model request failed.", detail = ex.Message });
+        }
     }
 
     [HttpPatch("scenes/{sceneId:guid}")]

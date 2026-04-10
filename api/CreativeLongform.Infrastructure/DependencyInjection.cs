@@ -45,6 +45,7 @@ public static class DependencyInjection
         services.AddSingleton<IGenerationRunCancellationRegistry, GenerationRunCancellationRegistry>();
         services.AddScoped<IGenerationOrchestrator, GenerationOrchestrator>();
         services.AddScoped<IWorldBuildingService, WorldBuildingService>();
+        services.AddScoped<IDraftRecommendationService, DraftRecommendationService>();
 
         return services;
     }

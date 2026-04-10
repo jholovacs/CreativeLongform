@@ -2,6 +2,19 @@ import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { apiBaseUrl } from '../core/api-config';
 
+export interface DraftRecommendationItem {
+  kind: string;
+  paragraphStart: number;
+  paragraphEnd: number;
+  problem: string;
+  replacementText?: string | null;
+  rewriteInstruction?: string | null;
+}
+
+export interface DraftRecommendationResult {
+  items: DraftRecommendationItem[];
+}
+
 export interface SceneWorkflowContext {
   hasPreviousScene: boolean;
   previousSceneEndStateJson: string | null;
@@ -41,5 +54,12 @@ export class SceneWorkflowService {
 
   patchChapter(chapterId: string, body: { isComplete?: boolean }) {
     return this.http.patch(`${apiBaseUrl}/api/chapters/${chapterId}`, body);
+  }
+
+  /** On-demand LLM analysis; proposals are not applied server-side. */
+  getDraftRecommendations(sceneId: string, draftText: string) {
+    return this.http.post<DraftRecommendationResult>(`${apiBaseUrl}/api/scenes/${sceneId}/draft/recommendations`, {
+      draftText
+    });
   }
 }

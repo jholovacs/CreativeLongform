@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Linq;
+using System.Text;
 using System.Net.Http;
 using System.Text.Json;
 using CreativeLongform.Application.Abstractions;
@@ -482,62 +483,31 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             }
 
             var text = draft;
-            var repairAttempt = 0;
-            ComplianceVerdict? lastCompliance = null;
 
-            while (repairAttempt < run.MaxRepairIterations)
+            await NotifyStepAsync(notifier, runId, PipelineStep.Compliance, progress.ElapsedMs,
+                "Compliance: checking the draft against scene instructions and world context.", cancellationToken);
+            var lastCompliance = await EvaluateComplianceAsync(db, ollama, critic, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
+            if (!lastCompliance.Pass)
             {
-                await NotifyStepAsync(notifier, runId, PipelineStep.Compliance, progress.ElapsedMs,
-                    "Compliance: checking the draft against scene instructions and world context.", cancellationToken);
-                lastCompliance = await EvaluateComplianceAsync(db, ollama, critic, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
-                if (lastCompliance.Pass)
-                    break;
-
-                repairAttempt++;
-                await NotifyStepAsync(notifier, runId, PipelineStep.Repair, progress.ElapsedMs,
-                    $"Repair (compliance): revision pass {repairAttempt} of {run.MaxRepairIterations} (draft model «{writer}»).", cancellationToken);
-                await notifier.NotifyAsync(runId, "RepairAttempt", PipelineStep.Repair.ToString(),
-                    $"Addressing compliance issues — attempt {repairAttempt} (draft model «{writer}»).", cancellationToken,
-                    progress.ElapsedMs(), null, null);
-                text = await RepairDraftForComplianceAsync(db, ollama, writer, run, text, lastCompliance, worldBlock, minWords, progress, cancellationToken);
-                if (!run.StopAfterDraft)
-                {
-                    var newAfter = await GeneratePostStateAsync(db, ollama, postStateModel, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
-                    await SaveSnapshotAsync(db, runId, PipelineStep.PostState, newAfter, cancellationToken);
-                }
+                await notifier.NotifyAsync(runId, "DraftReviewNote", PipelineStep.Compliance.ToString(),
+                    BuildComplianceIssuesOnlyDetail(lastCompliance),
+                    cancellationToken, progress.ElapsedMs(), null, null);
             }
-
-            if (lastCompliance is not { Pass: true })
-                throw new InvalidOperationException("Instruction compliance did not pass after maximum repair attempts.");
 
             QualityVerdict? lastQuality = null;
             if (!run.SkipQualityGate)
             {
                 var (reviewMin, acceptMin) = GetQualityScoreThresholds(run);
-                var qualityRepairAttempt = 0;
-                while (qualityRepairAttempt < run.MaxRepairIterations)
+                await NotifyStepAsync(notifier, runId, PipelineStep.Quality, progress.ElapsedMs,
+                    $"Quality: numeric prose score (pass ≥{reviewMin:0.#}; no automated repair ≥{acceptMin:0.#}).", cancellationToken);
+                lastQuality = await EvaluateQualityAsync(db, ollama, critic, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
+                var q = lastQuality.Score ?? 0;
+                if (q < reviewMin)
                 {
-                    await NotifyStepAsync(notifier, runId, PipelineStep.Quality, progress.ElapsedMs,
-                        $"Quality: numeric prose score (pass ≥{reviewMin:0.#}; no repair ≥{acceptMin:0.#}).", cancellationToken);
-                    lastQuality = await EvaluateQualityAsync(db, ollama, critic, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
-                    var q = lastQuality.Score!.Value;
-                    if (q >= acceptMin)
-                        break;
-                    if (q >= reviewMin)
-                        break;
-
-                    qualityRepairAttempt++;
-                    await NotifyStepAsync(notifier, runId, PipelineStep.Repair, progress.ElapsedMs,
-                        $"Repair (quality): revision pass {qualityRepairAttempt} of {run.MaxRepairIterations} (score {q:0.#} < {reviewMin:0.#}; draft model «{writer}»).", cancellationToken);
-                    await notifier.NotifyAsync(runId, "RepairAttempt", PipelineStep.Repair.ToString(),
-                        $"Addressing quality feedback — attempt {qualityRepairAttempt} (draft model «{writer}»).", cancellationToken,
-                        progress.ElapsedMs(), null, null);
-                    text = await RepairDraftForQualityAsync(db, ollama, writer, run, scene, stateBefore, text, lastQuality, worldBlock, minWords, progress, cancellationToken);
+                    await notifier.NotifyAsync(runId, "DraftReviewNote", PipelineStep.Quality.ToString(),
+                        BuildQualityScoreNoteDetail(lastQuality, q, reviewMin, acceptMin),
+                        cancellationToken, progress.ElapsedMs(), null, null);
                 }
-
-                if (lastQuality is null || lastQuality.Score is not double qFinal || qFinal < reviewMin)
-                    throw new InvalidOperationException(
-                        $"Prose quality score {(lastQuality?.Score?.ToString("0.#") ?? "?")} is below the configured minimum {reviewMin:0.#} after maximum repair attempts.");
             }
             else
             {
@@ -1202,99 +1172,6 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         return (review, accept);
     }
 
-    private async Task<string> RepairDraftForComplianceAsync(
-        ICreativeLongformDbContext db,
-        IOllamaClient ollama,
-        string model,
-        GenerationRun run,
-        string draft,
-        ComplianceVerdict verdict,
-        string worldContextBlock,
-        int minWords,
-        PipelineProgress? progress,
-        CancellationToken cancellationToken)
-    {
-        var proseOptions = new OllamaChatOptions { NumPredict = Math.Max(1024, _ollamaOptions.Value.DraftNumPredict) };
-        var system =
-            """
-            Revise the draft to address the issues. Preserve voice and plot. Output prose only.
-            Do not contradict story tone or linked world-building.
-            """
-            + InventionScopeHardRule
-            + ShowDontTellEmphasis
-            + """
-            Keep the result as substantial long-form scene prose (multiple paragraphs when appropriate), not a brief summary.
-            """;
-        var fixList = string.Join("\n", verdict.FixInstructions);
-        var user = $"""
-            Current draft:
-            {draft}
-
-            Violations to fix:
-            {string.Join("\n", verdict.Violations)}
-
-            Fix instructions:
-            {fixList}
-
-            {worldContextBlock}
-
-            The revised scene should be at least {minWords} words unless the scene instructions explicitly require brevity.
-            """;
-        var (text, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Repair, system, user, jsonFormat: false, proseOptions, cancellationToken: cancellationToken, progress,
-            "Repair draft for compliance");
-        return text.Trim();
-    }
-
-    private async Task<string> RepairDraftForQualityAsync(
-        ICreativeLongformDbContext db,
-        IOllamaClient ollama,
-        string model,
-        GenerationRun run,
-        Scene scene,
-        string stateBefore,
-        string draft,
-        QualityVerdict verdict,
-        string worldContextBlock,
-        int minWords,
-        PipelineProgress? progress,
-        CancellationToken cancellationToken)
-    {
-        var proseOptions = new OllamaChatOptions { NumPredict = Math.Max(1024, _ollamaOptions.Value.DraftNumPredict) };
-        var system =
-            """
-            Revise the draft to address the prose craft issues. Preserve plot and instruction compliance. Output prose only.
-            Do not remove, bowdlerize, or soften content for modesty, safety, or audience concerns — this is uncensored private fiction; only improve craft (voice, clarity, show vs tell).
-            """
-            + InventionScopeHardRule
-            + ShowDontTellEmphasis
-            + """
-            Maintain substantial scene length (multiple paragraphs) suitable for long-form fiction, not a terse fix.
-            """;
-        var user = $"""
-            Scene synopsis and instructions:
-            {SceneInstructionsForAgent(scene)}
-            Expected end notes (if any): {scene.ExpectedEndStateNotes ?? "(none)"}
-            State before (JSON): {stateBefore}
-            Latest critic quality score (0–100, higher is better): {verdict.Score:0.#}
-
-            Current draft:
-            {draft}
-
-            Issues:
-            {string.Join("\n", verdict.Issues)}
-
-            Fix instructions:
-            {string.Join("\n", verdict.FixInstructions)}
-
-            {worldContextBlock}
-
-            The revised scene should be at least {minWords} words unless the scene instructions explicitly require brevity.
-            """;
-        var (text, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Repair, system, user, jsonFormat: false, proseOptions, cancellationToken: cancellationToken, progress,
-            "Repair draft for quality");
-        return text.Trim();
-    }
-
     private async Task<string> RepairDraftWithUserInstructionAsync(
         ICreativeLongformDbContext db,
         IOllamaClient ollama,
@@ -1388,6 +1265,49 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             jsonFormat: false, proseOptions, cancellationToken: cancellationToken, progress,
             "Correct draft (full revision)");
         return textFull.Trim();
+    }
+
+    private static string BuildComplianceIssuesOnlyDetail(ComplianceVerdict v)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Compliance: issues found. The draft was not auto-revised — edit in review or regenerate.");
+        sb.AppendLine("Violations:");
+        if (v.Violations.Count == 0)
+            sb.AppendLine("  (none listed)");
+        else
+            foreach (var x in v.Violations)
+                sb.AppendLine($"  • {x}");
+        if (v.FixInstructions.Count > 0)
+        {
+            sb.AppendLine("Suggested fixes (for you to apply):");
+            foreach (var x in v.FixInstructions)
+                sb.AppendLine($"  • {x}");
+        }
+
+        return sb.ToString();
+    }
+
+    private static string BuildQualityScoreNoteDetail(QualityVerdict v, double score, double reviewMin, double acceptMin)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(
+            $"Quality score: {score:0.#} (below pipeline pass threshold {reviewMin:0.#}). The draft was not auto-revised.");
+        sb.AppendLine($"Bands: pass with review ≥{reviewMin:0.#}; no automated repair ≥{acceptMin:0.#}.");
+        if (v.Issues.Count > 0)
+        {
+            sb.AppendLine("Issues:");
+            foreach (var x in v.Issues)
+                sb.AppendLine($"  • {x}");
+        }
+
+        if (v.FixInstructions.Count > 0)
+        {
+            sb.AppendLine("Suggested craft fixes (optional):");
+            foreach (var x in v.FixInstructions)
+                sb.AppendLine($"  • {x}");
+        }
+
+        return sb.ToString();
     }
 
     private async Task SaveSnapshotAsync(

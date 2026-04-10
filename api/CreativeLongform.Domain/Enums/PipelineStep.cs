@@ -23,5 +23,8 @@ public enum PipelineStep
     WorldBuildingGlossary = 14,
 
     /// <summary>LLM picks world elements relevant to a scene synopsis.</summary>
-    SceneSynopsisWorldElements = 15
+    SceneSynopsisWorldElements = 15,
+
+    /// <summary>On-demand draft review: proposed paragraph-level edits for author approval (not auto-applied).</summary>
+    DraftRecommendationAnalysis = 16
 }
