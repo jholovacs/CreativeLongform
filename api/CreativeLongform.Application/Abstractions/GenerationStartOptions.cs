@@ -22,4 +22,4 @@ public sealed class GenerationStartOptions
     public double? QualityReviewOnlyMinScore { get; set; }
 }
 
-public sealed record FinalizeGenerationResult(string StateTableJson);
+public sealed record FinalizeGenerationResult(string StateTableJson, Guid? NextSceneId);

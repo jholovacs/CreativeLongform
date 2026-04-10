@@ -8,6 +8,8 @@ export const SCENE_WORKFLOW_FIELD_HELP = {
   chapterSelect: 'Chapter that contains this scene. Example: Part II — The Harbor.',
   sceneSelect: 'The scene you are drafting. Order is the scene index within the chapter.',
   chapterComplete: 'Mark the chapter finished when all its scenes are done and you are satisfied.',
+  manuscriptPanel:
+    'Finalized prose for this scene only. It is not replaced when you run Generate again; use Review Draft for the new run.',
 
   synopsis:
     'Main beat and purpose of this scene for generation. Example: Mara confronts her brother at the docks about the forged letter.',

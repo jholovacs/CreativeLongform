@@ -267,12 +267,43 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         run.Status = GenerationRunStatus.Succeeded;
         run.CompletedAt = DateTimeOffset.UtcNow;
         scene.LatestDraftText = draft;
+        scene.ManuscriptText = draft;
         scene.ApprovedStateTableJson = stateAfter;
         scene.PendingPostStateJson = null;
+
+        Guid? nextSceneId = null;
+        if (!scene.Chapter.IsComplete)
+        {
+            var chapterId = scene.ChapterId;
+            var currentOrder = scene.Order;
+            var toShift = await db.Scenes
+                .Where(s => s.ChapterId == chapterId && s.Order > currentOrder)
+                .ToListAsync(cancellationToken);
+            foreach (var s in toShift)
+                s.Order++;
+
+            var insertOrder = currentOrder + 1;
+            var newId = Guid.NewGuid();
+            db.Scenes.Add(new Scene
+            {
+                Id = newId,
+                ChapterId = chapterId,
+                Order = insertOrder,
+                Title = $"Scene {insertOrder}",
+                Synopsis = string.Empty,
+                Instructions =
+                    "Describe what happens in this scene. Revise this instruction in the scene workflow when you are ready to draft.",
+                NarrativePerspective = scene.NarrativePerspective,
+                NarrativeTense = scene.NarrativeTense,
+                BeginningStateJson = stateAfter
+            });
+            nextSceneId = newId;
+        }
+
         await db.SaveChangesAsync(cancellationToken);
         await notifier.NotifyAsync(generationRunId, "RunFinished", "Succeeded",
             "Finalization complete; approved state saved to the scene.", cancellationToken, finalizeProgress.ElapsedMs(), null, null);
-        return new FinalizeGenerationResult(stateAfter);
+        return new FinalizeGenerationResult(stateAfter, nextSceneId);
     }
 
     public async Task CorrectDraftAsync(Guid sceneId, Guid generationRunId, string userInstruction,

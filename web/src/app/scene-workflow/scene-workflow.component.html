@@ -101,6 +101,48 @@
     </details>
 
     @if (selectedSceneId) {
+      @if (sceneManuscript) {
+        <details
+          class="panel collapsible manuscript-panel"
+          [open]="panelOpen.manuscript"
+          (toggle)="onPanelToggle('manuscript', $event)"
+        >
+          <summary>
+            <span class="sum-title">Manuscript</span>
+            <span class="sum-preview">{{ manuscriptSummary }}</span>
+            <span class="panel-sum-actions">
+              <button
+                type="button"
+                class="btn-icon"
+                title="Expand section"
+                (click)="expandPanel('manuscript', $event)"
+                [disabled]="panelOpen.manuscript"
+              >
+                <app-ui-icon name="chevron-down" />
+                <span class="sr-only">Expand section</span>
+              </button>
+              <button
+                type="button"
+                class="btn-icon"
+                title="Collapse section"
+                (click)="collapsePanel('manuscript', $event)"
+                [disabled]="!panelOpen.manuscript"
+              >
+                <app-ui-icon name="chevron-up" />
+                <span class="sr-only">Collapse section</span>
+              </button>
+            </span>
+          </summary>
+          <div class="collapsible-inner">
+            <p class="hint" [title]="fieldHelp.manuscriptPanel">
+              Accepted prose from your last finalize for this scene. It remains visible when you switch scenes or generate a new
+              draft here.
+            </p>
+            <pre class="manuscript-body">{{ sceneManuscript }}</pre>
+          </div>
+        </details>
+      }
+
       <details
         class="panel collapsible"
         [open]="panelOpen.synopsis"

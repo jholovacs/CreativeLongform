@@ -67,7 +67,7 @@ export class GenerationService {
       approvedStateTableJson?: string | null;
     }
   ) {
-    return this.http.post<{ stateTableJson: string }>(
+    return this.http.post<{ stateTableJson: string; nextSceneId: string | null }>(
       `${apiBaseUrl}/api/scenes/${sceneId}/generation/finalize`,
       body
     );

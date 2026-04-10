@@ -25,6 +25,8 @@ public class Scene
     public string? ExpectedEndStateNotes { get; set; }
     /// <summary>Last successful or in-progress draft text.</summary>
     public string? LatestDraftText { get; set; }
+    /// <summary>Accepted prose after finalize (not overwritten by a new generation run).</summary>
+    public string? ManuscriptText { get; set; }
     public ICollection<GenerationRun> GenerationRuns { get; set; } = new List<GenerationRun>();
     public ICollection<SceneWorldElement> SceneWorldElements { get; set; } = new List<SceneWorldElement>();
     public TimelineEntry? TimelineEntry { get; set; }

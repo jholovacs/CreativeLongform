@@ -87,6 +87,8 @@ export interface Scene {
   pendingPostStateJson?: string | null;
   expectedEndStateNotes?: string | null;
   latestDraftText?: string | null;
+  /** Accepted prose after finalize; not overwritten by a new generation run. */
+  manuscriptText?: string | null;
 }
 
 /** API enum: 0 Scene, 1 WorldEvent */

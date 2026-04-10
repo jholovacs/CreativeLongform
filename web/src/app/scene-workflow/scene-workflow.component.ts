@@ -15,6 +15,7 @@ import { SCENE_WORKFLOW_FIELD_HELP } from './scene-workflow-field-help';
 
 type SceneWorkflowPanelKey =
   | 'storyPosition'
+  | 'manuscript'
   | 'synopsis'
   | 'voice'
   | 'beginningState'
@@ -60,6 +61,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   /** Collapsible details sections — bound to [open] and synced on toggle. */
   panelOpen: Record<SceneWorkflowPanelKey, boolean> = {
     storyPosition: true,
+    manuscript: true,
     synopsis: true,
     voice: true,
     beginningState: false,
@@ -166,11 +168,20 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.modalWorldSearch$.next(value);
   }
 
-  loadBooks(): void {
+  /** @param advanceToSceneId After reload, select this scene (e.g. new scene created on finalize). */
+  loadBooks(advanceToSceneId?: string | null): void {
     this.error = null;
     this.odata.getBooksWithScenes().subscribe({
       next: (res) => {
         this.books = res.value ?? [];
+        if (advanceToSceneId) {
+          const pos = this.findStoryPositionForScene(advanceToSceneId);
+          if (pos) {
+            this.selectedBookId = pos.bookId;
+            this.selectedChapterId = pos.chapterId;
+            this.selectedSceneId = pos.sceneId;
+          }
+        }
         this.applyStoryPositionAfterBooksLoad();
         this.syncFormFromScene();
         this.loadSceneWorldData();
@@ -180,6 +191,17 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
       },
       error: () => {}
     });
+  }
+
+  private findStoryPositionForScene(sceneId: string): StoredStoryPosition | null {
+    for (const b of this.books) {
+      for (const ch of b.chapters ?? []) {
+        if (ch.scenes?.some((s) => s.id === sceneId)) {
+          return { bookId: b.id, chapterId: ch.id, sceneId };
+        }
+      }
+    }
+    return null;
   }
 
   /** Restore from localStorage on cold load; revalidate after reload; fall back to first book/chapter/scene. */
@@ -288,7 +310,8 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
 
   scenesForChapter(): Scene[] {
     const ch = this.chaptersForBook().find((c) => c.id === this.selectedChapterId);
-    return ch?.scenes ?? [];
+    const scenes = ch?.scenes ?? [];
+    return [...scenes].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   }
 
   onBookChange(): void {
@@ -397,6 +420,16 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   get endStateSummary(): string {
     if (!this.lastStateTableJson?.trim()) return '';
     return this.truncate(this.lastStateTableJson, 72);
+  }
+
+  /** Finalized prose for the selected scene (persists when you generate a new draft on this scene). */
+  get sceneManuscript(): string {
+    return this.currentScene()?.manuscriptText?.trim() ?? '';
+  }
+
+  get manuscriptSummary(): string {
+    const t = this.sceneManuscript;
+    return t ? this.truncate(t, 72) : '';
   }
 
   onPanelToggle(panel: SceneWorkflowPanelKey, ev: Event): void {
@@ -1107,7 +1140,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
           this.awaitingReview = false;
           this.generationRunId = null;
           this.busy = false;
-          this.loadBooks();
+          this.loadBooks(res.nextSceneId ?? undefined);
         },
         error: () => {
           this.busy = false;
