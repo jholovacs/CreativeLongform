@@ -358,3 +358,16 @@ export interface LlmCall {
   /** Persist time. */
   createdAt?: string;
 }
+
+/** OData `ComplianceEvaluations` row — compliance / quality / transition verdict for a pipeline step. */
+export interface ComplianceEvaluation {
+  id: string;
+  generationRunId?: string | null;
+  /** `"Compliance"` | `"Quality"` | `"Transition"`. */
+  kind: string;
+  passed: boolean;
+  attemptNumber: number;
+  /** Serialized verdict (shape depends on `kind`). */
+  verdictJson: string;
+  createdAt?: string;
+}

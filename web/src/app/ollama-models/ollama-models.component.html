@@ -9,8 +9,9 @@
     <h1>Ollama models</h1>
     <p class="lede">
       Assign models for scene prose (writer), analysis (critic), agentic JSON edits (agent), world-building features,
-      and narrative state JSON (pre-state / post-state). Pull library tags or import a GGUF from a URL (Docker: shared
-      import volume required). Changes are logged below.
+      and narrative state JSON (pre-state / post-state). Pull library tags (with live download progress), remove
+      unused models from disk, import a GGUF, and browse the assignment change log in the collapsible sections below
+      (each closed by default).
     </p>
   </header>
 
@@ -101,123 +102,393 @@
         <h2>Installed in Ollama</h2>
         <p class="hint" title="Hover the tag or letter buttons for what each control does.">
           Click a tag to set Writer only, or use the letter buttons to assign this tag to a role. Then Save assignments.
+          Use the trash control to delete a model from the server and free disk space (same as
+          <code>ollama rm</code>). Sizes come from Ollama: <strong>disk</strong> is the GGUF footprint;
+          <strong>VRAM</strong> appears when that model is currently loaded in memory.
         </p>
         <ul class="tag-list">
-          @for (name of prefs.installedModels; track name) {
+          @for (m of prefs.installedModels; track m.name) {
             <li>
-              <button
-                type="button"
-                class="tag"
-                (click)="writerInput = name"
-                [disabled]="busy"
-                [title]="help.tagSetWriter"
-              >
-                {{ name }}
-              </button>
-              <span class="quick">
-                <button type="button" (click)="pickInstalled(name, 'writer')" [disabled]="busy" [title]="help.tagPickWriter">
-                  W
-                </button>
-                <button type="button" (click)="pickInstalled(name, 'critic')" [disabled]="busy" [title]="help.tagPickCritic">
-                  C
-                </button>
-                <button type="button" (click)="pickInstalled(name, 'agent')" [disabled]="busy" [title]="help.tagPickAgent">
-                  A
+              <div class="tag-row">
+                <button
+                  type="button"
+                  class="tag"
+                  (click)="writerInput = m.name"
+                  [disabled]="busy"
+                  [title]="help.tagSetWriter"
+                >
+                  {{ m.name }}
                 </button>
                 <button
                   type="button"
-                  (click)="pickInstalled(name, 'worldBuilding')"
+                  class="tag-delete"
+                  (click)="confirmDelete(m.name)"
                   [disabled]="busy"
-                  [title]="help.tagPickWorldBuilding"
+                  [title]="help.deleteFromDisk"
                 >
-                  WB
+                  <app-ui-icon name="trash" />
+                  <span class="sr-only">Remove from disk</span>
                 </button>
-                <button type="button" (click)="pickInstalled(name, 'preState')" [disabled]="busy" [title]="help.tagPickPreState">
-                  Pr
-                </button>
-                <button type="button" (click)="pickInstalled(name, 'postState')" [disabled]="busy" [title]="help.tagPickPostState">
-                  Po
-                </button>
-              </span>
+                <span class="quick">
+                  <button type="button" (click)="pickInstalled(m.name, 'writer')" [disabled]="busy" [title]="help.tagPickWriter">
+                    W
+                  </button>
+                  <button type="button" (click)="pickInstalled(m.name, 'critic')" [disabled]="busy" [title]="help.tagPickCritic">
+                    C
+                  </button>
+                  <button type="button" (click)="pickInstalled(m.name, 'agent')" [disabled]="busy" [title]="help.tagPickAgent">
+                    A
+                  </button>
+                  <button
+                    type="button"
+                    (click)="pickInstalled(m.name, 'worldBuilding')"
+                    [disabled]="busy"
+                    [title]="help.tagPickWorldBuilding"
+                  >
+                    WB
+                  </button>
+                  <button type="button" (click)="pickInstalled(m.name, 'preState')" [disabled]="busy" [title]="help.tagPickPreState">
+                    Pr
+                  </button>
+                  <button type="button" (click)="pickInstalled(m.name, 'postState')" [disabled]="busy" [title]="help.tagPickPostState">
+                    Po
+                  </button>
+                </span>
+              </div>
+              <p class="tag-meta">
+                <span [title]="help.installedSizeDisk">{{ formatBytes(m.sizeBytes) }} disk</span>
+                @if (m.parameterSize) {
+                  <span> · {{ m.parameterSize }} params</span>
+                }
+                @if (m.quantizationLevel) {
+                  <span> · {{ m.quantizationLevel }}</span>
+                }
+                @if (m.vramBytes != null) {
+                  <span class="tag-meta-vram" [title]="help.installedSizeVram">
+                    · {{ formatBytes(m.vramBytes) }} VRAM (loaded)
+                  </span>
+                }
+              </p>
             </li>
           }
         </ul>
       </div>
     }
 
-    <div class="panel">
-      <h2>Pull from library</h2>
-      <p class="hint">Runs <code>ollama pull</code> on the server (can take a long time for large models).</p>
-      <div class="row">
-        <input
-          type="text"
-          [(ngModel)]="pullModel"
-          placeholder="e.g. llama3.2"
-          [disabled]="busy"
-          [attr.title]="help.pullModel"
-        />
-        <button type="button" (click)="runPull()" [disabled]="busy" [title]="help.pullButton">Pull</button>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h2>Import GGUF from URL</h2>
-      <p class="hint">
-        Downloads the file into the API staging directory and runs <code>ollama create</code>. Requires Docker volume
-        <code>Ollama:ImportStagingDirectory</code> shared with the Ollama container (see compose).
-      </p>
-      <div class="grid">
-        <label>
-          HTTPS URL
-          <input
-            type="url"
-            [(ngModel)]="importUrl"
-            placeholder="https://…/model.gguf"
-            [disabled]="busy"
-            [attr.title]="help.importUrl"
-          />
-        </label>
-        <label>
-          Model name (registered in Ollama)
+    <details
+      class="panel collapsible"
+      [open]="panelOpen.pull"
+      (toggle)="onPanelToggle('pull', $event)"
+    >
+      <summary>
+        <span class="sum-title">Pull from library</span>
+        <span class="sum-preview">Streams <code>ollama pull</code> with live status and a progress bar when byte counts are available.</span>
+        <span class="panel-sum-actions">
+          <button
+            type="button"
+            class="btn-icon"
+            title="Expand section"
+            (click)="expandPanel('pull', $event)"
+            [disabled]="panelOpen.pull"
+          >
+            <app-ui-icon name="chevron-down" />
+            <span class="sr-only">Expand section</span>
+          </button>
+          <button
+            type="button"
+            class="btn-icon"
+            title="Collapse section"
+            (click)="collapsePanel('pull', $event)"
+            [disabled]="!panelOpen.pull"
+          >
+            <app-ui-icon name="chevron-up" />
+            <span class="sr-only">Collapse section</span>
+          </button>
+        </span>
+      </summary>
+      <div class="collapsible-inner">
+        <div class="row">
           <input
             type="text"
-            [(ngModel)]="importName"
-            placeholder="my-custom-model"
+            [(ngModel)]="pullModel"
+            placeholder="e.g. llama3.2"
             [disabled]="busy"
-            [attr.title]="help.importName"
+            [attr.title]="help.pullModel"
           />
-        </label>
-      </div>
-      <button type="button" (click)="runImportUrl()" [disabled]="busy" [title]="help.importButton">Download &amp; register</button>
-    </div>
-
-    @if (logRows.length > 0) {
-      <div class="panel">
-        <h2>Change log</h2>
-        <table class="log-table">
-          <thead>
-            <tr>
-              <th>When</th>
-              <th>Role</th>
-              <th>Previous</th>
-              <th>New</th>
-              <th>Source</th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (row of logRows; track row.id) {
-              <tr>
-                <td [attr.title]="row.occurredAt">{{ row.occurredAt | date: 'medium' }}</td>
-                <td>{{ roleLabel(row.role) }}</td>
-                <td>{{ row.previousModel ?? '—' }}</td>
-                <td>{{ row.newModel }}</td>
-                <td>{{ row.source }}</td>
-              </tr>
+          <button type="button" (click)="runPull()" [disabled]="busy" [title]="help.pullButton">Pull</button>
+        </div>
+        @if (pullProgress) {
+          <div class="pull-progress" role="status" aria-live="polite">
+            <p class="pull-progress-line">{{ pullProgress.statusLine }}</p>
+            @if (pullProgress.percent !== null) {
+              <progress class="pull-progress-bar" [value]="pullProgress.percent" max="100">
+                {{ pullProgress.percent }}%
+              </progress>
             }
-          </tbody>
-        </table>
+          </div>
+        }
       </div>
-    }
+    </details>
+
+    <details
+      class="panel collapsible"
+      [open]="panelOpen.import"
+      (toggle)="onPanelToggle('import', $event)"
+    >
+      <summary>
+        <span class="sum-title">Import GGUF from URL</span>
+        <span class="sum-preview">
+          Download into API staging and run <code>ollama create</code>. Requires shared <code>Ollama:ImportStagingDirectory</code> volume (see compose).
+        </span>
+        <span class="panel-sum-actions">
+          <button
+            type="button"
+            class="btn-icon"
+            title="Expand section"
+            (click)="expandPanel('import', $event)"
+            [disabled]="panelOpen.import"
+          >
+            <app-ui-icon name="chevron-down" />
+            <span class="sr-only">Expand section</span>
+          </button>
+          <button
+            type="button"
+            class="btn-icon"
+            title="Collapse section"
+            (click)="collapsePanel('import', $event)"
+            [disabled]="!panelOpen.import"
+          >
+            <app-ui-icon name="chevron-up" />
+            <span class="sr-only">Collapse section</span>
+          </button>
+        </span>
+      </summary>
+      <div class="collapsible-inner">
+        <div class="grid">
+          <label>
+            HTTPS URL
+            <input
+              type="url"
+              [(ngModel)]="importUrl"
+              placeholder="https://…/model.gguf"
+              [disabled]="busy"
+              [attr.title]="help.importUrl"
+            />
+          </label>
+          <label>
+            Model name (registered in Ollama)
+            <input
+              type="text"
+              [(ngModel)]="importName"
+              placeholder="my-custom-model"
+              [disabled]="busy"
+              [attr.title]="help.importName"
+            />
+          </label>
+        </div>
+        <button type="button" (click)="runImportUrl()" [disabled]="busy" [title]="help.importButton">Download &amp; register</button>
+      </div>
+    </details>
+
+    <details
+      class="panel collapsible"
+      [open]="panelOpen.log"
+      (toggle)="onPanelToggle('log', $event)"
+    >
+      <summary>
+        <span class="sum-title">Change log</span>
+        <span class="sum-preview">Up to 500 recent entries — search, filter, sort, 10 rows per page.</span>
+        <span class="panel-sum-actions">
+          <button
+            type="button"
+            class="btn-icon"
+            title="Expand section"
+            (click)="expandPanel('log', $event)"
+            [disabled]="panelOpen.log"
+          >
+            <app-ui-icon name="chevron-down" />
+            <span class="sr-only">Expand section</span>
+          </button>
+          <button
+            type="button"
+            class="btn-icon"
+            title="Collapse section"
+            (click)="collapsePanel('log', $event)"
+            [disabled]="!panelOpen.log"
+          >
+            <app-ui-icon name="chevron-up" />
+            <span class="sr-only">Collapse section</span>
+          </button>
+        </span>
+      </summary>
+      <div class="collapsible-inner log-panel">
+        <div class="log-toolbar">
+          <label class="log-field">
+            <span class="log-label">Search</span>
+            <input
+              type="search"
+              [value]="logSearch()"
+              (input)="onLogSearchInput($any($event.target).value)"
+              placeholder="Time, role, models, source…"
+              [attr.title]="help.changelogSearch"
+              autocomplete="off"
+            />
+          </label>
+          <label class="log-field">
+            <span class="log-label">Role</span>
+            <select
+              [value]="logRoleFilter() === null ? '' : logRoleFilter()"
+              (change)="onLogRoleFilterChange($any($event.target).value)"
+              [attr.title]="help.changelogRoleFilter"
+            >
+              <option value="">All roles</option>
+              <option value="0">Writer</option>
+              <option value="1">Critic</option>
+              <option value="2">Agent</option>
+              <option value="3">World-building</option>
+              <option value="4">Pre-state</option>
+              <option value="5">Post-state</option>
+            </select>
+          </label>
+          <label class="log-field log-field-grow">
+            <span class="log-label">Source contains</span>
+            <input
+              type="search"
+              [value]="logSourceFilter()"
+              (input)="onLogSourceFilterChange($any($event.target).value)"
+              placeholder="e.g. ui"
+              [attr.title]="help.changelogSourceFilter"
+              autocomplete="off"
+            />
+          </label>
+          <button type="button" class="secondary" (click)="clearLogFilters()" [disabled]="!logSearch() && logRoleFilter() === null && !logSourceFilter()">
+            Clear filters
+          </button>
+        </div>
+
+        @if (!logHasAnyRows()) {
+          <p class="log-empty">No change log entries yet.</p>
+        } @else if (logSorted().length === 0) {
+          <p class="log-empty">No entries match the current filters.</p>
+        } @else {
+          <div class="log-meta" aria-live="polite">
+            @if (logRange().total > 0) {
+              Showing {{ logRange().start }}–{{ logRange().end }} of {{ logRange().total }}
+            } @else {
+              No rows
+            }
+            · Page {{ logRange().page }} / {{ logRange().totalPages }}
+          </div>
+
+          <div class="log-table-wrap" tabindex="0" role="region" aria-label="Model assignment change log">
+              <table class="log-table">
+                <thead>
+                  <tr>
+                    <th scope="col">
+                      <button
+                        type="button"
+                        class="sort-btn"
+                        (click)="toggleLogSort('when')"
+                        [attr.aria-sort]="sortAriaSort('when')"
+                        title="Sort by time"
+                      >
+                        When
+                        @if (logSortKey() === 'when') {
+                          <span class="sort-ind" aria-hidden="true">{{ logSortDir() === 'asc' ? '↑' : '↓' }}</span>
+                        }
+                      </button>
+                    </th>
+                    <th scope="col">
+                      <button
+                        type="button"
+                        class="sort-btn"
+                        (click)="toggleLogSort('role')"
+                        [attr.aria-sort]="sortAriaSort('role')"
+                        title="Sort by role"
+                      >
+                        Role
+                        @if (logSortKey() === 'role') {
+                          <span class="sort-ind" aria-hidden="true">{{ logSortDir() === 'asc' ? '↑' : '↓' }}</span>
+                        }
+                      </button>
+                    </th>
+                    <th scope="col">
+                      <button
+                        type="button"
+                        class="sort-btn"
+                        (click)="toggleLogSort('previous')"
+                        [attr.aria-sort]="sortAriaSort('previous')"
+                        title="Sort by previous model"
+                      >
+                        Previous
+                        @if (logSortKey() === 'previous') {
+                          <span class="sort-ind" aria-hidden="true">{{ logSortDir() === 'asc' ? '↑' : '↓' }}</span>
+                        }
+                      </button>
+                    </th>
+                    <th scope="col">
+                      <button
+                        type="button"
+                        class="sort-btn"
+                        (click)="toggleLogSort('new')"
+                        [attr.aria-sort]="sortAriaSort('new')"
+                        title="Sort by new model"
+                      >
+                        New
+                        @if (logSortKey() === 'new') {
+                          <span class="sort-ind" aria-hidden="true">{{ logSortDir() === 'asc' ? '↑' : '↓' }}</span>
+                        }
+                      </button>
+                    </th>
+                    <th scope="col">
+                      <button
+                        type="button"
+                        class="sort-btn"
+                        (click)="toggleLogSort('source')"
+                        [attr.aria-sort]="sortAriaSort('source')"
+                        title="Sort by source"
+                      >
+                        Source
+                        @if (logSortKey() === 'source') {
+                          <span class="sort-ind" aria-hidden="true">{{ logSortDir() === 'asc' ? '↑' : '↓' }}</span>
+                        }
+                      </button>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (row of logPaged(); track row.id) {
+                    <tr>
+                      <td [attr.title]="row.occurredAt">{{ row.occurredAt | date: 'medium' }}</td>
+                      <td>{{ roleLabel(row.role) }}</td>
+                      <td>{{ row.previousModel ?? '—' }}</td>
+                      <td>{{ row.newModel }}</td>
+                      <td>{{ row.source }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+
+            <nav class="log-pager" aria-label="Change log pages">
+              <button type="button" (click)="setLogPage(1)" [disabled]="logRange().page <= 1" title="First page">«</button>
+              <button type="button" (click)="goLogPage(-1)" [disabled]="logRange().page <= 1" title="Previous page">Prev</button>
+              <span class="pager-status">Page {{ logRange().page }} / {{ logRange().totalPages }}</span>
+              <button type="button" (click)="goLogPage(1)" [disabled]="logRange().page >= logRange().totalPages" title="Next page">
+                Next
+              </button>
+              <button
+                type="button"
+                (click)="setLogPage(logRange().totalPages)"
+                [disabled]="logRange().page >= logRange().totalPages"
+                title="Last page"
+              >
+                »
+              </button>
+            </nav>
+          }
+      </div>
+    </details>
   }
 
   <app-llm-working-indicator [visible]="busy" label="Working…" />

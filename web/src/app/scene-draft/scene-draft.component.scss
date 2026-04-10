@@ -147,6 +147,143 @@
     color: var(--muted);
   }
 
+  .draft-compliance-panel {
+    margin: 0 0 1rem;
+    padding: 0.85rem 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface) 92%, var(--accent) 8%);
+  }
+
+  .draft-compliance-title {
+    font-size: 1rem;
+    margin: 0 0 0.65rem;
+    font-weight: 600;
+  }
+
+  .draft-compliance-sub {
+    font-size: 0.85rem;
+    margin: 0 0 0.4rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .draft-compliance-live {
+    margin-bottom: 0.85rem;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  .draft-compliance-live-list {
+    margin: 0;
+    padding-left: 1.15rem;
+    list-style: disc;
+  }
+
+  .draft-compliance-live-list li {
+    margin-bottom: 0.35rem;
+  }
+
+  .draft-compliance-step {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--muted);
+    margin-bottom: 0.15rem;
+  }
+
+  .draft-compliance-detail {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .draft-compliance-cards {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .draft-compliance-card {
+    margin: 0;
+    padding: 0.65rem 0.75rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .draft-compliance-card--pass {
+    border-color: color-mix(in srgb, var(--success, #2e7d32) 45%, var(--border));
+  }
+
+  .draft-compliance-card--fail {
+    border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  }
+
+  .draft-compliance-card-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem 0.75rem;
+    margin-bottom: 0.35rem;
+  }
+
+  .draft-compliance-kind {
+    font-weight: 600;
+  }
+
+  .draft-compliance-attempt {
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+
+  .draft-compliance-badge {
+    font-size: 0.8rem;
+    padding: 0.15rem 0.45rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    margin-left: auto;
+  }
+
+  .draft-compliance-badge--pass {
+    background: color-mix(in srgb, var(--success, #2e7d32) 18%, transparent);
+    border-color: color-mix(in srgb, var(--success, #2e7d32) 35%, var(--border));
+  }
+
+  .draft-compliance-badge--warn {
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
+    border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+  }
+
+  .draft-compliance-score {
+    margin: 0 0 0.35rem;
+    font-size: 0.95rem;
+  }
+
+  .draft-compliance-line,
+  .draft-compliance-fix {
+    margin: 0.25rem 0 0;
+    font-size: 0.9rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .draft-compliance-fix {
+    padding-left: 0.5rem;
+    border-left: 3px solid color-mix(in srgb, var(--accent) 50%, var(--border));
+  }
+
+  .draft-compliance-empty {
+    margin: 0;
+  }
+
   .draft-stack {
     position: relative;
     display: block;

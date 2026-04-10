@@ -326,7 +326,34 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         await db.SaveChangesAsync(cancellationToken);
         await notifier.NotifyAsync(generationRunId, "RunFinished", "Succeeded",
             "Finalization complete; approved state saved to the scene.", cancellationToken, finalizeProgress.ElapsedMs(), null, null);
+        await DeleteGenerationRunsForSceneAfterFinalizeAsync(db, sceneId, cancellationToken);
         return new FinalizeGenerationResult(stateAfter, nextSceneId);
+    }
+
+    /// <summary>
+    /// Removes all <see cref="GenerationRun"/> rows for the scene (and cascade-deleted LLM/state/compliance logs).
+    /// Called after manuscript finalize so audit data from draft runs does not accumulate indefinitely.
+    /// </summary>
+    private async Task DeleteGenerationRunsForSceneAfterFinalizeAsync(
+        ICreativeLongformDbContext db, Guid sceneId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var runs = await db.GenerationRuns.Where(r => r.SceneId == sceneId).ToListAsync(cancellationToken);
+            if (runs.Count == 0)
+                return;
+            db.GenerationRuns.RemoveRange(runs);
+            await db.SaveChangesAsync(cancellationToken);
+            _logger.LogInformation(
+                "Deleted {Count} generation run(s) for scene {SceneId} after finalize (cascade removes related LLM calls, snapshots, compliance rows).",
+                runs.Count, sceneId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Failed to delete generation runs for scene {SceneId} after finalize; manuscript is already saved.",
+                sceneId);
+        }
     }
 
     public async Task<CorrectDraftResult> CorrectDraftAsync(Guid sceneId, Guid generationRunId, string userInstruction,

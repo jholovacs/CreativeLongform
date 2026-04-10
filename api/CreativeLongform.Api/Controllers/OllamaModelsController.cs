@@ -1,5 +1,7 @@
+using System.Linq;
 using CreativeLongform.Application.Abstractions;
 using CreativeLongform.Application.Options;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
@@ -30,25 +32,36 @@ public sealed class OllamaModelsController : ControllerBase
     public async Task<ActionResult<OllamaPreferencesResponse>> GetPreferences(CancellationToken cancellationToken)
     {
         var assignments = await _prefs.GetAssignmentsAsync(cancellationToken);
-        IReadOnlyList<string> installed;
+        IReadOnlyList<OllamaLocalModelInfo> installed;
         try
         {
-            installed = await _ollamaAdmin.ListModelNamesAsync(cancellationToken);
+            installed = await _ollamaAdmin.ListLocalModelsAsync(cancellationToken);
         }
         catch (Exception ex)
         {
             return Ok(new OllamaPreferencesResponse
             {
                 Assignments = assignments,
-                InstalledModels = Array.Empty<string>(),
+                InstalledModels = Array.Empty<OllamaInstalledModelDto>(),
                 OllamaListError = ex.Message
             });
         }
 
+        var installedDtos = installed
+            .Select(m => new OllamaInstalledModelDto
+            {
+                Name = m.Name,
+                SizeBytes = m.SizeBytes,
+                ParameterSize = m.ParameterSize,
+                QuantizationLevel = m.QuantizationLevel,
+                VramBytes = m.VramBytes
+            })
+            .ToList();
+
         return Ok(new OllamaPreferencesResponse
         {
             Assignments = assignments,
-            InstalledModels = installed,
+            InstalledModels = installedDtos,
             OllamaListError = null
         });
     }
@@ -83,6 +96,48 @@ public sealed class OllamaModelsController : ControllerBase
         catch (InvalidOperationException ex)
         {
             // Ollama returned an error (often disk / volume I/O). Surface message to the UI; not an API bug.
+            return StatusCode(StatusCodes.Status502BadGateway, ex.Message);
+        }
+
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Stream a library pull with <see cref="IOllamaAdminApi.StreamPullAsync"/> (NDJSON lines) for live progress in the UI.
+    /// </summary>
+    [HttpPost("pull/stream")]
+    public async Task<IActionResult> PullStream([FromBody] PullModelBody body, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(body.Model))
+            return BadRequest("model is required.");
+        try
+        {
+            Response.ContentType = "application/x-ndjson; charset=utf-8";
+            Response.Headers.CacheControl = "no-store";
+            HttpContext.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
+            await _ollamaAdmin.StreamPullAsync(body.Model.Trim(), Response.Body, cancellationToken);
+            return new EmptyResult();
+        }
+        catch (InvalidOperationException ex)
+        {
+            if (Response.HasStarted)
+                return new EmptyResult();
+            return StatusCode(StatusCodes.Status502BadGateway, ex.Message);
+        }
+    }
+
+    /// <summary>Remove a model from the Ollama host disk (free space).</summary>
+    [HttpPost("models/delete")]
+    public async Task<ActionResult> DeleteModel([FromBody] DeleteModelBody body, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(body.Model))
+            return BadRequest("model is required.");
+        try
+        {
+            await _ollamaAdmin.DeleteModelAsync(body.Model.Trim(), cancellationToken);
+        }
+        catch (InvalidOperationException ex)
+        {
             return StatusCode(StatusCodes.Status502BadGateway, ex.Message);
         }
 
@@ -152,11 +207,26 @@ public sealed class OllamaModelsController : ControllerBase
     public sealed class OllamaPreferencesResponse
     {
         public OllamaModelAssignmentsDto Assignments { get; set; } = null!;
-        public IReadOnlyList<string> InstalledModels { get; set; } = Array.Empty<string>();
+        public IReadOnlyList<OllamaInstalledModelDto> InstalledModels { get; set; } = Array.Empty<OllamaInstalledModelDto>();
         public string? OllamaListError { get; set; }
     }
 
+    public sealed class OllamaInstalledModelDto
+    {
+        public string Name { get; set; } = "";
+        public long SizeBytes { get; set; }
+        public string? ParameterSize { get; set; }
+        public string? QuantizationLevel { get; set; }
+        /// <summary>VRAM while loaded (<c>GET /api/ps</c>); null when not in memory.</summary>
+        public long? VramBytes { get; set; }
+    }
+
     public sealed class PullModelBody
+    {
+        public string Model { get; set; } = "";
+    }
+
+    public sealed class DeleteModelBody
     {
         public string Model { get; set; } = "";
     }

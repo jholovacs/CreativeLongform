@@ -50,7 +50,7 @@
         </div>
         @if (scope === 'chapter' && chapters.length > 0) {
           <label class="chapter-pick">
-            Chapter
+            <span class="chapter-pick-label">Chapter</span>
             <select [(ngModel)]="chapterId" (ngModelChange)="onChapterChange()" [disabled]="busy">
               @for (ch of chapters; track ch.id) {
                 <option [ngValue]="ch.id">{{ ch.order }}. {{ ch.title }}</option>

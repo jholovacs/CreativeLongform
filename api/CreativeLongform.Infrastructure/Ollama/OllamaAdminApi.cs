@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using CreativeLongform.Application.Abstractions;
+using System.Linq;
 
 namespace CreativeLongform.Infrastructure.Ollama;
 
@@ -55,27 +56,87 @@ public sealed class OllamaAdminApi : IOllamaAdminApi
         return "";
     }
 
-    public async Task<IReadOnlyList<string>> ListModelNamesAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<OllamaLocalModelInfo>> ListLocalModelsAsync(CancellationToken cancellationToken = default)
     {
+        var vramByName = await GetVramBytesByModelNameAsync(cancellationToken);
         using var response = await _http.GetAsync("tags", cancellationToken);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
         var root = doc.RootElement;
         if (!root.TryGetProperty("models", out var models) || models.ValueKind != JsonValueKind.Array)
-            return Array.Empty<string>();
-        var list = new List<string>();
+            return Array.Empty<OllamaLocalModelInfo>();
+        var list = new List<OllamaLocalModelInfo>();
         foreach (var m in models.EnumerateArray())
         {
-            if (m.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String)
+            if (!m.TryGetProperty("name", out var nameEl) || nameEl.ValueKind != JsonValueKind.String)
+                continue;
+            var name = nameEl.GetString()?.Trim();
+            if (string.IsNullOrEmpty(name))
+                continue;
+            long sizeBytes = 0;
+            if (m.TryGetProperty("size", out var sz) && sz.TryGetInt64(out var szBytes))
+                sizeBytes = szBytes;
+            string? parameterSize = null;
+            string? quant = null;
+            if (m.TryGetProperty("details", out var details) && details.ValueKind == JsonValueKind.Object)
             {
-                var s = name.GetString();
-                if (!string.IsNullOrWhiteSpace(s))
-                    list.Add(s.Trim());
+                if (details.TryGetProperty("parameter_size", out var ps) && ps.ValueKind == JsonValueKind.String)
+                    parameterSize = ps.GetString();
+                if (details.TryGetProperty("quantization_level", out var q) && q.ValueKind == JsonValueKind.String)
+                    quant = q.GetString();
             }
+
+            long? vram = vramByName.TryGetValue(name, out var v) ? v : null;
+            list.Add(new OllamaLocalModelInfo
+            {
+                Name = name,
+                SizeBytes = sizeBytes,
+                ParameterSize = parameterSize,
+                QuantizationLevel = quant,
+                VramBytes = vram
+            });
         }
 
         return list;
+    }
+
+    /// <summary>VRAM per model name from <c>GET /api/ps</c> (models currently loaded).</summary>
+    private async Task<Dictionary<string, long>> GetVramBytesByModelNameAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await _http.GetAsync("ps", cancellationToken);
+            if (!response.IsSuccessStatusCode)
+                return new Dictionary<string, long>(StringComparer.Ordinal);
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            if (!doc.RootElement.TryGetProperty("models", out var models) || models.ValueKind != JsonValueKind.Array)
+                return new Dictionary<string, long>(StringComparer.Ordinal);
+            var dict = new Dictionary<string, long>(StringComparer.Ordinal);
+            foreach (var m in models.EnumerateArray())
+            {
+                if (!m.TryGetProperty("name", out var nameEl) || nameEl.ValueKind != JsonValueKind.String)
+                    continue;
+                var name = nameEl.GetString()?.Trim();
+                if (string.IsNullOrEmpty(name))
+                    continue;
+                if (m.TryGetProperty("size_vram", out var sv) && sv.TryGetInt64(out var vram))
+                    dict[name] = vram;
+            }
+
+            return dict;
+        }
+        catch
+        {
+            return new Dictionary<string, long>(StringComparer.Ordinal);
+        }
+    }
+
+    public async Task<IReadOnlyList<string>> ListModelNamesAsync(CancellationToken cancellationToken = default)
+    {
+        var models = await ListLocalModelsAsync(cancellationToken);
+        return models.Select(m => m.Name).ToList();
     }
 
     public async Task PullAsync(string modelName, CancellationToken cancellationToken = default)
@@ -90,6 +151,45 @@ public sealed class OllamaAdminApi : IOllamaAdminApi
         {
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             throw new InvalidOperationException(FormatOllamaFailure("Ollama pull", (int)response.StatusCode, body));
+        }
+    }
+
+    public async Task StreamPullAsync(string modelName, Stream output, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(modelName))
+            throw new ArgumentException("Model name is required.", nameof(modelName));
+        using var request = new HttpRequestMessage(HttpMethod.Post, "pull")
+        {
+            Content = JsonContent.Create(new Dictionary<string, object?>
+            {
+                ["name"] = modelName.Trim(),
+                ["stream"] = true
+            })
+        };
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new InvalidOperationException(FormatOllamaFailure("Ollama pull", (int)response.StatusCode, body));
+        }
+
+        await using var src = await response.Content.ReadAsStreamAsync(cancellationToken);
+        await src.CopyToAsync(output, cancellationToken);
+    }
+
+    public async Task DeleteModelAsync(string modelName, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(modelName))
+            throw new ArgumentException("Model name is required.", nameof(modelName));
+        using var request = new HttpRequestMessage(HttpMethod.Delete, "delete")
+        {
+            Content = JsonContent.Create(new Dictionary<string, object?> { ["model"] = modelName.Trim() })
+        };
+        using var response = await _http.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new InvalidOperationException(FormatOllamaFailure("Ollama delete", (int)response.StatusCode, body));
         }
     }
 

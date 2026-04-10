@@ -11,7 +11,7 @@ public sealed class ODataEdmModelBuilderTests
     /// <summary>
     /// <para><b>System under test:</b> <see cref="ODataEdmModelBuilder.Build"/>.</para>
     /// <para><b>Test case:</b> Build the EDM model and look up several entity sets by name.</para>
-    /// <para><b>Expected result:</b> Model is non-null; <c>Books</c>, <c>SceneWorldElements</c>, <c>TimelineEntries</c>, <c>LlmCalls</c> exist.</para>
+    /// <para><b>Expected result:</b> Model is non-null; <c>Books</c>, <c>SceneWorldElements</c>, <c>TimelineEntries</c>, <c>LlmCalls</c>, <c>ComplianceEvaluations</c> exist.</para>
     /// <para><b>Why it matters:</b> Missing entity sets cause runtime failures for all OData clients; this catches renames/omissions early.</para>
     /// </summary>
     [Fact]
@@ -23,6 +23,7 @@ public sealed class ODataEdmModelBuilderTests
         Assert.NotNull(model.EntityContainer.FindEntitySet("SceneWorldElements"));
         Assert.NotNull(model.EntityContainer.FindEntitySet("TimelineEntries"));
         Assert.NotNull(model.EntityContainer.FindEntitySet("LlmCalls"));
+        Assert.NotNull(model.EntityContainer.FindEntitySet("ComplianceEvaluations"));
     }
 
     /// <summary>

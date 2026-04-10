@@ -39,6 +39,16 @@ export const OLLAMA_MODELS_FIELD_HELP = {
   useDefaultPreState: 'Remove DB override for Pre-state; use Ollama:PreStateModel or Writer.',
   useDefaultPostState: 'Remove DB override for Post-state; use Ollama:PostStateModel or Writer.',
 
-  pullButton: 'Download the model from the Ollama library into the server’s Ollama store (same as ollama pull).',
-  importButton: 'Download the GGUF from the URL, then ollama create with the given name. Requires ImportStagingDirectory and shared volume in Docker.'
+  pullButton:
+    'Download the model from the Ollama library into the server’s Ollama store (same as ollama pull). Progress streams from the server; the bar shows layer byte progress when Ollama reports totals.',
+  deleteFromDisk:
+    'Delete this model from the Ollama host disk to free space (ollama rm). Does not change saved assignments—clear slots if the name is still listed.',
+  installedSizeDisk: 'Total size of model files on disk (Ollama GET /api/tags size).',
+  installedSizeVram:
+    'VRAM reported by Ollama for this model while it is loaded (GET /api/ps size_vram). Shown only when the model is in memory.',
+  importButton: 'Download the GGUF from the URL, then ollama create with the given name. Requires ImportStagingDirectory and shared volume in Docker.',
+
+  changelogSearch: 'Search across timestamp, role, previous/new model names, and source (case-insensitive).',
+  changelogRoleFilter: 'Show only changes for one pipeline role.',
+  changelogSourceFilter: 'Keep rows whose source string contains this text (e.g. ui).'
 } as const;

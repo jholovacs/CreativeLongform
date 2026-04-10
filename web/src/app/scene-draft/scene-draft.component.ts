@@ -2,14 +2,16 @@ import { CommonModule, Location } from '@angular/common';
 import { Component, ElementRef, OnDestroy, OnInit, ViewChild, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { HubConnection } from '@microsoft/signalr';
 import { Subscription } from 'rxjs';
 import {
   applyParagraphReplace,
   getParagraphNeighborhood,
   getParagraphSelectionRangeInDraft
 } from '../core/draft-paragraph';
+import { ParsedComplianceVerdict, parseComplianceVerdictJson } from '../core/compliance-verdict-parse';
 import { formatJsonPretty } from '../core/json-format';
-import { Book, Chapter, Scene } from '../models/entities';
+import { Book, Chapter, ComplianceEvaluation, Scene } from '../models/entities';
 import { CorrectDraftResponse, GenerationService } from '../services/generation.service';
 import { ODataService } from '../services/odata.service';
 import { DraftRecommendationItem, SceneWorkflowService } from '../services/scene-workflow.service';
@@ -64,6 +66,11 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
   busy = false;
   generationRunId: string | null = null;
 
+  /** Persisted pipeline compliance / quality / transition rows for the active run. */
+  complianceEvaluations: ComplianceEvaluation[] = [];
+  /** Live SignalR notes (e.g. compliance detail) while connected to the run. */
+  draftReviewNotes: Array<{ step: string; detail: string }> = [];
+
   draftText = '';
   correctInstruction = '';
   lastStateTableJson: string | null = null;
@@ -98,6 +105,9 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
 
   private recommendationsSub: Subscription | undefined;
   private reviewDraftSub: Subscription | undefined;
+  private complianceSub: Subscription | undefined;
+  private hubConnection: HubConnection | null = null;
+  private hubConnectedRunId: string | null = null;
 
   ngOnInit(): void {
     this.sceneId = this.route.snapshot.paramMap.get('sceneId') ?? '';
@@ -116,6 +126,8 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.recommendationsSub?.unsubscribe();
     this.reviewDraftSub?.unsubscribe();
+    this.complianceSub?.unsubscribe();
+    void this.disconnectComplianceHub();
   }
 
   private load(): void {
@@ -144,9 +156,12 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
                 this.error =
                   'No draft run is awaiting review for this scene. Use Scene Workflow to generate a draft, or pick another scene.';
               }
+              this.syncComplianceForRun();
             },
             error: () => {}
           });
+        } else {
+          this.syncComplianceForRun();
         }
       },
       error: () => {
@@ -176,6 +191,79 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
     this.pendingPostStateRaw = s.pendingPostStateJson ?? null;
     const endRaw = s.pendingPostStateJson ?? s.approvedStateTableJson ?? null;
     this.lastStateTableJson = endRaw ? formatJsonPretty(endRaw) : null;
+  }
+
+  /** Verdict fields for template (small list; safe to parse per change detection). */
+  parsedVerdict(row: ComplianceEvaluation): ParsedComplianceVerdict {
+    return parseComplianceVerdictJson(row.verdictJson ?? '{}', row.kind);
+  }
+
+  complianceKindLabel(kind: string): string {
+    switch (kind) {
+      case 'Quality':
+        return 'Quality';
+      case 'Transition':
+        return 'Transition';
+      case 'Compliance':
+      default:
+        return 'Compliance';
+    }
+  }
+
+  private syncComplianceForRun(): void {
+    const id = this.generationRunId;
+    this.complianceSub?.unsubscribe();
+    this.complianceSub = undefined;
+    if (!id) {
+      this.complianceEvaluations = [];
+      this.draftReviewNotes = [];
+      void this.disconnectComplianceHub();
+      return;
+    }
+    this.complianceSub = this.odata.getComplianceEvaluationsForRun(id).subscribe({
+      next: (rows) => {
+        this.complianceEvaluations = rows;
+      },
+      error: () => {
+        this.complianceEvaluations = [];
+      }
+    });
+    this.connectComplianceHub(id);
+  }
+
+  private connectComplianceHub(runId: string): void {
+    if (this.hubConnectedRunId === runId && this.hubConnection) {
+      return;
+    }
+    if (this.hubConnectedRunId !== runId) {
+      this.draftReviewNotes = [];
+    }
+    void this.hubConnection?.stop();
+    this.hubConnection = null;
+    this.hubConnectedRunId = runId;
+    this.hubConnection = this.generation.connectToRun(runId, {
+      onProgress: (eventName, payload) => {
+        if (eventName !== 'DraftReviewNote') {
+          return;
+        }
+        const step = (payload.step ?? '').trim();
+        const detail = (payload.detail ?? '').trim();
+        if (!detail) {
+          return;
+        }
+        this.draftReviewNotes = [
+          { step: step || 'Compliance / quality', detail },
+          ...this.draftReviewNotes
+        ];
+      },
+      onFinished: () => {}
+    });
+  }
+
+  private async disconnectComplianceHub(): Promise<void> {
+    await this.hubConnection?.stop();
+    this.hubConnection = null;
+    this.hubConnectedRunId = null;
   }
 
   backToSceneDesign(): void {
@@ -319,6 +407,9 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
         next: (res) => {
           this.lastStateTableJson = res.stateTableJson ? formatJsonPretty(res.stateTableJson) : null;
           this.generationRunId = null;
+          this.complianceEvaluations = [];
+          this.draftReviewNotes = [];
+          void this.disconnectComplianceHub();
           this.busy = false;
           this.clearDraftRecommendations();
           const nextId = res.nextSceneId ?? this.sceneId;

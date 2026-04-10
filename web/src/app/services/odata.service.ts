@@ -2,7 +2,7 @@ import { HttpClient, HttpParams } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { apiBaseUrl } from '../core/api-config';
 import { odataRows } from '../core/odata-unwrap';
-import { Book, LlmCall, ODataCollection } from '../models/entities';
+import { Book, ComplianceEvaluation, LlmCall, ODataCollection } from '../models/entities';
 import { map } from 'rxjs/operators';
 
 /** OData enum literal (not <code>status eq 4</code>) — matches EDM <c>GenerationRunStatus</c>. */
@@ -51,6 +51,15 @@ export class ODataService {
         return rows[0]?.id ?? null;
       })
     );
+  }
+
+  /** Compliance / quality / transition verdict rows for a generation run (newest first). */
+  getComplianceEvaluationsForRun(runId: string) {
+    const filter = `generationRunId eq ${runId}`;
+    const params = new HttpParams().set('$filter', filter).set('$orderby', 'createdAt desc');
+    return this.http
+      .get<ODataCollection<ComplianceEvaluation>>(`${apiBaseUrl}/odata/ComplianceEvaluations`, { params })
+      .pipe(map((res) => odataRows<ComplianceEvaluation>(res)));
   }
 
   /** Single LLM audit row (full request JSON + response text). */

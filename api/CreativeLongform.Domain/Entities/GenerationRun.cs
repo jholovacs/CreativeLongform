@@ -5,6 +5,7 @@ namespace CreativeLongform.Domain.Entities;
 /// <summary>
 /// One execution of the scene prose pipeline for a <see cref="Scene"/>: draft, quality/compliance, optional repair loop,
 /// finalize, and cancellation. Holds thresholds and snapshot of draft text; linked to <see cref="LlmCall"/> and <see cref="StateSnapshot"/> rows.
+/// After the user finalizes the draft into <see cref="Scene.ManuscriptText"/>, all runs for that scene are deleted (cascade removes audit rows) to avoid unbounded log growth.
 /// </summary>
 public class GenerationRun
 {

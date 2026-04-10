@@ -37,6 +37,69 @@
   } @else if (bookId) {
     <div class="panel draft-panel">
       <h2 class="panel-title">Draft text</h2>
+      @if (generationRunId) {
+        <div class="draft-compliance-panel" role="region" aria-label="Compliance and pipeline notes">
+          <h3 class="draft-compliance-title">Compliance &amp; quality</h3>
+          @if (draftReviewNotes.length) {
+            <div class="draft-compliance-live">
+              <h4 class="draft-compliance-sub">Pipeline notifications</h4>
+              <ul class="draft-compliance-live-list">
+                @for (n of draftReviewNotes; track $index) {
+                  <li>
+                    <span class="draft-compliance-step">{{ n.step }}</span>
+                    <span class="draft-compliance-detail">{{ n.detail }}</span>
+                  </li>
+                }
+              </ul>
+            </div>
+          }
+          @if (complianceEvaluations.length) {
+            <ul class="draft-compliance-cards">
+              @for (row of complianceEvaluations; track row.id) {
+                <li
+                  class="draft-compliance-card"
+                  [class.draft-compliance-card--pass]="row.passed"
+                  [class.draft-compliance-card--fail]="!row.passed"
+                >
+                  <div class="draft-compliance-card-head">
+                    <span class="draft-compliance-kind">{{ complianceKindLabel(row.kind) }}</span>
+                    @if (row.attemptNumber > 0) {
+                      <span class="draft-compliance-attempt" title="Attempt number">Attempt {{ row.attemptNumber }}</span>
+                    }
+                    <span
+                      class="draft-compliance-badge"
+                      [class.draft-compliance-badge--pass]="row.passed"
+                      [class.draft-compliance-badge--warn]="!row.passed"
+                    >
+                      {{ row.passed ? 'Passed' : 'Needs attention' }}
+                    </span>
+                  </div>
+                  @if (row.kind === 'Quality' && parsedVerdict(row).score !== null) {
+                    <p class="draft-compliance-score">Score: {{ parsedVerdict(row).score }}</p>
+                  }
+                  @for (v of parsedVerdict(row).violations; track v) {
+                    <p class="draft-compliance-line">{{ v }}</p>
+                  }
+                  @for (i of parsedVerdict(row).issues; track i) {
+                    <p class="draft-compliance-line">{{ i }}</p>
+                  }
+                  @for (g of parsedVerdict(row).gaps; track g) {
+                    <p class="draft-compliance-line">{{ g }}</p>
+                  }
+                  @for (f of parsedVerdict(row).fixInstructions; track f) {
+                    <p class="draft-compliance-fix">{{ f }}</p>
+                  }
+                </li>
+              }
+            </ul>
+          } @else if (!draftReviewNotes.length) {
+            <p class="hint draft-compliance-empty">
+              No compliance or quality verdict rows are stored for this run yet. Live notifications appear here while generation
+              is in progress.
+            </p>
+          }
+        </div>
+      }
       <p class="hint">
         Edit freely, use <strong>Suggest improvements</strong> for optional LLM analysis and proposals, run
         <strong>Correct With LLM</strong> when you want a targeted revision, or finalize to build the end-state table. With text

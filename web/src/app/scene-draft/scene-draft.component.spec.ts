@@ -2,6 +2,8 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap } from '@angular/router';
+import { HubConnection } from '@microsoft/signalr';
+import { GenerationService } from '../services/generation.service';
 import { SceneDraftComponent } from './scene-draft.component';
 
 /** Draft workspace: loads nested book/scene data and resolves awaiting-review generation run. */
@@ -22,6 +24,11 @@ describe('SceneDraftComponent', () => {
         }
       ]
     }).compileComponents();
+
+    const generation = TestBed.inject(GenerationService);
+    spyOn(generation, 'connectToRun').and.returnValue({
+      stop: () => Promise.resolve()
+    } as HubConnection);
   });
 
   /**
@@ -69,6 +76,10 @@ describe('SceneDraftComponent', () => {
       `sceneId eq ${sceneId} and status eq CreativeLongform.Domain.Enums.GenerationRunStatus'AwaitingUserReview'`
     );
     runsReq.flush({ value: [{ id: 'run-xyz' }] });
+
+    const complianceReq = httpMock.expectOne((r) => r.url.includes('/odata/ComplianceEvaluations'));
+    expect(complianceReq.request.params.get('$filter')).toBe('generationRunId eq run-xyz');
+    complianceReq.flush({ value: [] });
 
     expect(fixture.componentInstance.generationRunId).toBe('run-xyz');
     expect(fixture.componentInstance.draftText).toBe('Draft body.');

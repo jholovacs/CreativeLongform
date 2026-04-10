@@ -21,6 +21,7 @@ public static class ODataEdmModelBuilder
         builder.EntityType<SceneWorldElement>().HasKey(e => new { e.SceneId, e.WorldElementId });
         builder.EntitySet<TimelineEntry>("TimelineEntries");
         builder.EntitySet<LlmCall>("LlmCalls");
+        builder.EntitySet<ComplianceEvaluation>("ComplianceEvaluations");
         return builder.GetEdmModel();
     }
 }
