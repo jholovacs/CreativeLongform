@@ -42,6 +42,11 @@ export const SCENE_WORKFLOW_FIELD_HELP = {
   qualityReviewOnlyMinScore:
     'Minimum score to pass. Between this and “no repair” above, the run still passes but issues are listed for your manual review. Default 55.',
 
+  draftTargetMinWords:
+    'Minimum word count for the scene draft. If the model writes fewer words, an expansion pass tries to reach at least this length.',
+  draftTargetMaxWords:
+    'Upper end of the target band shown to the writer model (e.g. “roughly min–max words”). Should be ≥ min; the server will align them if reversed.',
+
   copyPrompt: 'Copy the full request payload (prompt) sent to the model to the clipboard.',
 
   copyLlmResponse: 'Copy the full LLM response text to the clipboard.'

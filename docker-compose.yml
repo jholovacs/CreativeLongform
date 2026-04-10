@@ -23,6 +23,7 @@ services:
       - "11434:11434"
     volumes:
       - ollama:/root/.ollama
+      - ollama_import_staging:/shared/ollama-import
     restart: unless-stopped
 
   api:
@@ -43,8 +44,11 @@ services:
       Ollama__BaseUrl: "http://ollama:11434/api"
       Ollama__WriterModel: "${OLLAMA_MODEL:-llama3.2}"
       Ollama__CriticModel: "${OLLAMA_MODEL:-llama3.2}"
+      Ollama__ImportStagingDirectory: "/shared/ollama-import"
     ports:
       - "5094:8080"
+    volumes:
+      - ollama_import_staging:/shared/ollama-import
     healthcheck:
       test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/8080"]
       interval: 5s
@@ -71,3 +75,4 @@ services:
 volumes:
   pgdata:
   ollama:
+  ollama_import_staging:

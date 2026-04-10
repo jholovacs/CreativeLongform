@@ -9,26 +9,24 @@ using CreativeLongform.Domain.Entities;
 using CreativeLongform.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-
 namespace CreativeLongform.Application.Services;
 
 public sealed class WorldBuildingService : IWorldBuildingService
 {
     private readonly ICreativeLongformDbContext _db;
     private readonly IOllamaClient _ollama;
-    private readonly IOptions<OllamaOptions> _ollamaOptions;
+    private readonly IOllamaModelPreferencesService _modelPrefs;
     private readonly ILogger<WorldBuildingService> _logger;
 
     public WorldBuildingService(
         ICreativeLongformDbContext db,
         IOllamaClient ollama,
-        IOptions<OllamaOptions> ollamaOptions,
+        IOllamaModelPreferencesService modelPrefs,
         ILogger<WorldBuildingService> logger)
     {
         _db = db;
         _ollama = ollama;
-        _ollamaOptions = ollamaOptions;
+        _modelPrefs = modelPrefs;
         _logger = logger;
     }
 
@@ -79,7 +77,7 @@ public sealed class WorldBuildingService : IWorldBuildingService
     {
         await _db.Books.AsNoTracking().FirstAsync(b => b.Id == bookId, cancellationToken);
 
-        var model = _ollamaOptions.Value.WriterModel;
+        var model = await _modelPrefs.GetWorldBuildingModelAsync(cancellationToken);
         var step = isExtract ? PipelineStep.WorldBuildingExtract : PipelineStep.WorldBuildingGenerate;
 
         var system = """
@@ -187,7 +185,7 @@ public sealed class WorldBuildingService : IWorldBuildingService
         if (others.Count == 0)
             return Array.Empty<WorldBuildingSuggestedLink>();
 
-        var model = _ollamaOptions.Value.WriterModel;
+        var model = await _modelPrefs.GetWorldBuildingModelAsync(cancellationToken);
         var system = """
             You output ONLY valid JSON. No markdown fences.
             Schema: { "suggestedLinks": [ { "fromTitle": string, "toTitle": string, "relationLabel": string } ] }.
@@ -426,7 +424,7 @@ public sealed class WorldBuildingService : IWorldBuildingService
         var passes = BuildCanonReviewPasses(focus, allElements, linkLines, timelineLines);
         var map = BuildTitleToIdMap(allElements);
         var proposals = new List<LinkCanonReviewProposal>();
-        var model = _ollamaOptions.Value.WriterModel;
+        var model = await _modelPrefs.GetWorldBuildingModelAsync(cancellationToken);
         var system = """
             You output ONLY valid JSON. No markdown fences.
             Schema: {
@@ -935,7 +933,7 @@ public sealed class WorldBuildingService : IWorldBuildingService
         if (elements.Count == 0)
             return Array.Empty<Guid>();
 
-        var model = _ollamaOptions.Value.WriterModel;
+        var model = await _modelPrefs.GetWorldBuildingModelAsync(cancellationToken);
         var system = """
             You output ONLY valid JSON. No markdown fences.
             Schema: { "elementIds": string[] } — each value must be a UUID copied exactly from the input list.
@@ -1189,7 +1187,7 @@ public sealed class WorldBuildingService : IWorldBuildingService
         Dictionary<Guid, HashSet<string>> alternatesById, CancellationToken cancellationToken)
     {
         const int chunkSize = 40;
-        var model = _ollamaOptions.Value.WriterModel;
+        var model = await _modelPrefs.GetWorldBuildingModelAsync(cancellationToken);
         var system = """
             You output ONLY valid JSON. No markdown fences.
             Schema: { "entries": [ { "elementId": string (uuid), "alternateNames": string[] } ] }.

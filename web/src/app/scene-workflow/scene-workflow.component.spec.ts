@@ -8,6 +8,7 @@ describe('SceneWorkflowComponent', () => {
   let httpMock: HttpTestingController;
 
   beforeEach(async () => {
+    localStorage.removeItem('clf.sceneWorkflow.qualityThresholds');
     await TestBed.configureTestingModule({
       imports: [SceneWorkflowComponent],
       providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])]
@@ -20,6 +21,8 @@ describe('SceneWorkflowComponent', () => {
   it('should create and load books', () => {
     const fixture = TestBed.createComponent(SceneWorkflowComponent);
     fixture.detectChanges();
+    const genReq = httpMock.expectOne((r) => r.url.includes('/api/settings/generation'));
+    genReq.flush({ qualityAcceptMinScore: 75, qualityReviewOnlyMinScore: 55 });
     const booksReq = httpMock.expectOne((r) => r.url.includes('/odata/Books'));
     booksReq.flush({ value: [] });
     expect(fixture.componentInstance).toBeTruthy();

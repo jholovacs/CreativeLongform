@@ -2,12 +2,9 @@
   <h1>Your stories</h1>
   <p class="lede">Open a story for world-building, or go to Scenes to run generation.</p>
 
-  @if (error) {
-    <p class="error">{{ error }}</p>
-  }
-
   <div class="actions">
     <a routerLink="/new-story" class="cta">New story</a>
+    <a routerLink="/ollama-models" class="secondary">Ollama models</a>
     <button type="button" (click)="load()" [disabled]="loading">Reload</button>
   </div>
 

@@ -122,6 +122,10 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   qualityAcceptMinScore = 75;
   qualityReviewOnlyMinScore = 55;
 
+  /** Draft length band (words); persisted locally; sent as min/max overrides to the API. */
+  draftTargetMinWords = 1500;
+  draftTargetMaxWords = 2000;
+
   private hub: HubConnection | null = null;
 
   private static readonly storyPositionStorageKey = 'clf.sceneWorkflow.storyPosition';
@@ -174,9 +178,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
           this.loadWorkflowContext();
         }
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Failed to load books (is the API running?)';
-      }
+      error: () => {}
     });
   }
 
@@ -383,7 +385,9 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
 
   get generateSummary(): string {
     if (this.busy) return 'Generating…';
-    return 'Ready';
+    const lo = this.draftTargetMinWords;
+    const hi = this.draftTargetMaxWords;
+    return `Ready · target ${lo}–${hi} words`;
   }
 
   get reviewSummary(): string {
@@ -491,8 +495,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
           this.worldBusy = false;
           this.loadBooks();
         },
-        error: (e) => {
-          this.error = e?.message ?? 'Could not save scene';
+        error: () => {
           this.worldBusy = false;
         }
       });
@@ -507,9 +510,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
         this.chapterComplete = next;
         this.loadBooks();
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Could not update chapter';
-      }
+      error: () => {}
     });
   }
 
@@ -534,8 +535,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
         this.suggestModalOpen = true;
         this.loadModalWorldPage();
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Suggestion failed';
+      error: () => {
         this.suggestBusy = false;
       }
     });
@@ -793,8 +793,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
         this.worldBusy = false;
         this.loadSceneWorldData();
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Failed to save world links';
+      error: () => {
         this.worldBusy = false;
       }
     });
@@ -870,10 +869,12 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   }
 
   private loadQualityThresholds(): void {
-    const stored = this.readQualityThresholdsFromStorage();
+    const stored = this.readGenerationPrefsFromStorage();
     if (stored) {
       this.qualityAcceptMinScore = stored.accept;
       this.qualityReviewOnlyMinScore = stored.review;
+      this.draftTargetMinWords = stored.minWords;
+      this.draftTargetMaxWords = stored.maxWords;
       return;
     }
     this.generation.getGenerationDefaults().subscribe({
@@ -887,30 +888,53 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     });
   }
 
-  private readQualityThresholdsFromStorage(): { accept: number; review: number } | null {
+  private readGenerationPrefsFromStorage(): {
+    accept: number;
+    review: number;
+    minWords: number;
+    maxWords: number;
+  } | null {
     try {
       const raw = globalThis.localStorage?.getItem(SceneWorkflowComponent.qualityThresholdsStorageKey);
       if (!raw) return null;
-      const o = JSON.parse(raw) as { qualityAcceptMinScore?: unknown; qualityReviewOnlyMinScore?: unknown };
+      const o = JSON.parse(raw) as {
+        qualityAcceptMinScore?: unknown;
+        qualityReviewOnlyMinScore?: unknown;
+        draftTargetMinWords?: unknown;
+        draftTargetMaxWords?: unknown;
+      };
       if (typeof o.qualityAcceptMinScore !== 'number' || typeof o.qualityReviewOnlyMinScore !== 'number') {
         return null;
       }
+      const minW =
+        typeof o.draftTargetMinWords === 'number'
+          ? SceneWorkflowComponent.clampDraftWordCount(o.draftTargetMinWords)
+          : 1500;
+      const maxW =
+        typeof o.draftTargetMaxWords === 'number'
+          ? SceneWorkflowComponent.clampDraftWordCount(o.draftTargetMaxWords)
+          : 2000;
+      const [a, b] = SceneWorkflowComponent.alignDraftWordRange(minW, maxW);
       return {
         accept: SceneWorkflowComponent.clampQualityScore(o.qualityAcceptMinScore),
-        review: SceneWorkflowComponent.clampQualityScore(o.qualityReviewOnlyMinScore)
+        review: SceneWorkflowComponent.clampQualityScore(o.qualityReviewOnlyMinScore),
+        minWords: a,
+        maxWords: b
       };
     } catch {
       return null;
     }
   }
 
-  private persistQualityThresholds(): void {
+  private persistGenerationPrefs(): void {
     try {
       globalThis.localStorage?.setItem(
         SceneWorkflowComponent.qualityThresholdsStorageKey,
         JSON.stringify({
           qualityAcceptMinScore: this.qualityAcceptMinScore,
-          qualityReviewOnlyMinScore: this.qualityReviewOnlyMinScore
+          qualityReviewOnlyMinScore: this.qualityReviewOnlyMinScore,
+          draftTargetMinWords: this.draftTargetMinWords,
+          draftTargetMaxWords: this.draftTargetMaxWords
         })
       );
     } catch {
@@ -921,12 +945,34 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   onQualityThresholdsChange(): void {
     this.qualityAcceptMinScore = SceneWorkflowComponent.clampQualityScore(this.qualityAcceptMinScore);
     this.qualityReviewOnlyMinScore = SceneWorkflowComponent.clampQualityScore(this.qualityReviewOnlyMinScore);
-    this.persistQualityThresholds();
+    this.persistGenerationPrefs();
+  }
+
+  onDraftWordRangeChange(): void {
+    const [lo, hi] = SceneWorkflowComponent.alignDraftWordRange(
+      SceneWorkflowComponent.clampDraftWordCount(this.draftTargetMinWords),
+      SceneWorkflowComponent.clampDraftWordCount(this.draftTargetMaxWords)
+    );
+    this.draftTargetMinWords = lo;
+    this.draftTargetMaxWords = hi;
+    this.persistGenerationPrefs();
   }
 
   private static clampQualityScore(n: number): number {
     if (typeof n !== 'number' || Number.isNaN(n)) return 75;
     return Math.min(100, Math.max(0, n));
+  }
+
+  private static clampDraftWordCount(n: number): number {
+    if (typeof n !== 'number' || Number.isNaN(n)) return 1500;
+    return Math.min(20000, Math.max(100, Math.round(n)));
+  }
+
+  /** Ensures min ≤ max after clamping each bound. */
+  private static alignDraftWordRange(minWords: number, maxWords: number): [number, number] {
+    const a = SceneWorkflowComponent.clampDraftWordCount(minWords);
+    const b = SceneWorkflowComponent.clampDraftWordCount(maxWords);
+    return a <= b ? [a, b] : [b, a];
   }
 
   copyGenLogTextToClipboard(text: string | null | undefined): void {
@@ -954,8 +1000,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.pushProgressEvent('Local', {
       runId: '',
       step: 'start',
-      detail:
-        'Saving scene world links, then starting generation (draft review mode, target ~1500–2000 words). Waiting for server run id…',
+      detail: `Saving scene world links, then starting generation (draft review mode, target ~${this.draftTargetMinWords}–${this.draftTargetMaxWords} words). Waiting for server run id…`,
       elapsedMs: 0,
       stepDurationMs: null,
       llmPreview: null
@@ -966,13 +1011,15 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
 
     const sceneId = this.selectedSceneId;
     this.onQualityThresholdsChange();
+    this.onDraftWordRangeChange();
     this.world
       .putSceneWorldElements(sceneId, [...this.selectedWorldIds])
       .pipe(
         concatMap(() =>
           this.generation.startGeneration(sceneId, {
             stopAfterDraft: true,
-            minWordsOverride: 1500,
+            minWordsOverride: this.draftTargetMinWords,
+            maxWordsOverride: this.draftTargetMaxWords,
             qualityAcceptMinScore: this.qualityAcceptMinScore,
             qualityReviewOnlyMinScore: this.qualityReviewOnlyMinScore
           })
@@ -994,14 +1041,12 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
             onFinished: (p) => this.onGenerationFinished(p)
           });
         },
-        error: (e) => {
-          this.error =
-            e?.error?.message ?? e?.message ?? 'Could not save scene world links or start generation';
+        error: () => {
           this.busy = false;
           this.pushProgressEvent('Local', {
             runId: '',
             step: 'error',
-            detail: this.error ?? 'Request failed',
+            detail: 'Request failed — see error dialog for full details.',
             elapsedMs: null,
             stepDurationMs: null,
             llmPreview: null
@@ -1042,9 +1087,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
           llmPreview: null
         });
       },
-      error: (e) => {
-        this.error = e?.error?.message ?? e?.message ?? 'Could not cancel generation';
-      }
+      error: () => {}
     });
   }
 
@@ -1066,12 +1109,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
           this.busy = false;
           this.loadBooks();
         },
-        error: (e) => {
-          const body = e?.error as { message?: string; detail?: string } | undefined;
-          this.error =
-            body?.message && body?.detail
-              ? `${body.message} ${body.detail}`
-              : body?.message ?? e?.message ?? 'Finalize failed';
+        error: () => {
           this.busy = false;
         }
       });
@@ -1131,8 +1169,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
           }
         });
       },
-      error: (e) => {
-        this.error = e?.error?.message ?? e?.message ?? 'Correction failed';
+      error: () => {
         this.busy = false;
       }
     });

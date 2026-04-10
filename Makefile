@@ -26,7 +26,8 @@ setup: check-docker
 	@bash scripts/setup.sh
 
 check-docker:
-	@docker info >/dev/null 2>&1 || (echo "Docker is not running. Install Docker Desktop: https://docs.docker.com/desktop/" && exit 1)
+	@command -v docker >/dev/null 2>&1 || (echo "docker: command not found in this shell's PATH. Docker Desktop may still be running — open a terminal where 'docker version' works (same one you use for compose), or ensure Docker's CLI is on PATH for Make (Windows: restart the IDE/terminal after installing Docker)." && exit 1)
+	@docker info >/dev/null 2>&1 || (echo "Docker CLI is on PATH but cannot reach the daemon. Full message:" && docker info 2>&1; exit 1)
 	@echo "Docker OK"
 
 check-ollama:

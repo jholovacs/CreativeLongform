@@ -29,6 +29,7 @@ public sealed class GenerationStartController : ControllerBase
             {
                 StopAfterDraft = body.StopAfterDraft,
                 MinWordsOverride = body.MinWordsOverride,
+                MaxWordsOverride = body.MaxWordsOverride,
                 SkipQualityGate = body.SkipQualityGate,
                 QualityAcceptMinScore = body.QualityAcceptMinScore,
                 QualityReviewOnlyMinScore = body.QualityReviewOnlyMinScore
@@ -107,6 +108,7 @@ public sealed class GenerationStartController : ControllerBase
         public string? IdempotencyKey { get; set; }
         public bool StopAfterDraft { get; set; }
         public int? MinWordsOverride { get; set; }
+        public int? MaxWordsOverride { get; set; }
         /// <summary>Skips the LLM prose quality gate (compliance still runs).</summary>
         public bool SkipQualityGate { get; set; }
         /// <summary>0–100; overrides server default for this run.</summary>

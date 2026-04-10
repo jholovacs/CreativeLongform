@@ -24,6 +24,16 @@ public static class DependencyInjection
 
         services.Configure<OllamaOptions>(configuration.GetSection(OllamaOptions.SectionName));
 
+        services.AddScoped<IOllamaModelPreferencesService, OllamaModelPreferencesService>();
+
+        services.AddHttpClient<IOllamaAdminApi, OllamaAdminApi>((sp, client) =>
+        {
+            var opts = sp.GetRequiredService<IConfiguration>().GetSection(OllamaOptions.SectionName)
+                .Get<OllamaOptions>() ?? new OllamaOptions();
+            client.BaseAddress = new Uri(opts.BaseUrl.TrimEnd('/') + "/");
+            client.Timeout = TimeSpan.FromMinutes(60);
+        });
+
         services.AddHttpClient<IOllamaClient, OllamaClient>((sp, client) =>
         {
             var opts = sp.GetRequiredService<IConfiguration>().GetSection(OllamaOptions.SectionName)

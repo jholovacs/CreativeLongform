@@ -13,5 +13,9 @@ export const routes: Routes = [
   {
     path: 'scenes',
     loadComponent: () => import('./scene-workflow/scene-workflow.component').then((m) => m.SceneWorkflowComponent)
+  },
+  {
+    path: 'ollama-models',
+    loadComponent: () => import('./ollama-models/ollama-models.component').then((m) => m.OllamaModelsComponent)
   }
 ];

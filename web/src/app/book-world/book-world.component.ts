@@ -1,5 +1,4 @@
 import { CommonModule } from '@angular/common';
-import { HttpErrorResponse } from '@angular/common/http';
 import { Component, HostListener, OnDestroy, OnInit, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
@@ -380,8 +379,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
         this.timelineVizOpen = true;
         this.timelineVizLoading = false;
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Could not load timeline for visualization';
+      error: () => {
         this.timelineVizLoading = false;
       }
     });
@@ -786,8 +784,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
           this.busy = false;
           this.load();
         },
-        error: (e) => {
-          this.error = e?.message ?? 'Could not save currency pair';
+        error: () => {
           this.busy = false;
         }
       });
@@ -807,8 +804,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
         this.busy = false;
         this.load();
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Could not update timeline order';
+      error: () => {
         this.busy = false;
       }
     });
@@ -824,8 +820,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
         this.busy = false;
         this.load();
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Delete failed';
+      error: () => {
         this.busy = false;
       }
     });
@@ -878,8 +873,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
         this.newTimelineCurrencyExchangeNote = '';
         this.load();
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Could not add timeline event';
+      error: () => {
         this.busy = false;
       }
     });
@@ -900,16 +894,13 @@ export class BookWorldComponent implements OnInit, OnDestroy {
         this.calDaysPerYear = this.measurementPayload.calendar?.daysPerYear ?? null;
         this.calDaysPerWeek = this.measurementPayload.calendar?.daysPerWeek ?? null;
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Failed to load book';
-      }
+      error: () => {}
     });
     this.world.getWorldElements(this.bookId).subscribe({
       next: (res) => {
         this.pickerElements = res.value ?? [];
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Failed to load world elements';
+      error: () => {
         this.pickerElements = [];
       }
     });
@@ -1028,8 +1019,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
           this.busy = false;
           this.load();
         },
-        error: (e) => {
-          this.error = e?.message ?? 'Save failed';
+        error: () => {
           this.busy = false;
         }
       });
@@ -1066,8 +1056,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
           this.busy = false;
           this.load();
         },
-        error: (e) => {
-          this.error = e?.message ?? 'Save failed';
+        error: () => {
           this.busy = false;
         }
       });
@@ -1106,8 +1095,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
         }
         this.load();
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Extract failed';
+      error: () => {
         this.busy = false;
       }
     });
@@ -1125,8 +1113,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
         }
         this.load();
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Generate failed';
+      error: () => {
         this.busy = false;
       }
     });
@@ -1201,8 +1188,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
         this.closeSuggestedLinksModal();
         this.load();
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Could not create link';
+      error: () => {
         this.suggestModalBusy = false;
       }
     });
@@ -1221,9 +1207,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
           this.linkCanonRows = list.map((p) => this.toLinkCanonUiRow(p));
           this.linkCanonModalOpen = true;
         },
-        error: (e) => {
-          this.error = e?.message ?? 'Canon review failed';
-        }
+        error: () => {}
       });
   }
 
@@ -1302,8 +1286,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
         this.closeLinkCanonModal();
         this.load();
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Could not apply canon changes';
+      error: () => {
         this.linkCanonApplyBusy = false;
       }
     });
@@ -1415,8 +1398,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
               }
             });
         },
-        error: (e) => {
-          this.error = e?.message ?? 'Update failed';
+        error: () => {
           this.busy = false;
         }
       });
@@ -1432,8 +1414,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
         if (this.editing?.id === el.id) this.editing = null;
         this.load();
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Delete failed';
+      error: () => {
         this.busy = false;
       }
     });
@@ -1478,8 +1459,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
               }
             });
         },
-        error: (e) => {
-          this.error = e?.message ?? 'Create failed';
+        error: () => {
           this.busy = false;
         }
       });
@@ -1511,8 +1491,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
           this.linkRelationDetail = '';
           this.load();
         },
-        error: (e) => {
-          this.error = e?.message ?? 'Could not create link';
+        error: () => {
           this.busy = false;
         }
       });
@@ -1567,16 +1546,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
         this.closeLinkDetailModal();
         this.loadLinksPage();
       },
-      error: (e: HttpErrorResponse) => {
-        if (e.status === 409) {
-          this.error =
-            'A link with the same endpoints and label may already exist.';
-        } else {
-          this.error =
-            typeof e.error === 'string'
-              ? e.error
-              : (e.error?.message ?? e.message ?? 'Could not save link');
-        }
+      error: () => {
         this.busy = false;
       }
     });
@@ -1599,8 +1569,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
         a.click();
         URL.revokeObjectURL(url);
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Could not generate glossary';
+      error: () => {
         this.glossaryBusy = false;
       }
     });
@@ -1620,8 +1589,7 @@ export class BookWorldComponent implements OnInit, OnDestroy {
         this.busy = false;
         this.load();
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Delete link failed';
+      error: () => {
         this.busy = false;
       }
     });

@@ -1,0 +1,222 @@
+<section class="ollama-models">
+  <nav class="crumb">
+    <a routerLink="/" class="crumb-link" [title]="help.backToStories"><app-ui-icon name="arrow-left" /><span>Stories</span></a>
+    <span class="crumb-sep" aria-hidden="true">·</span>
+    <span class="crumb-current" aria-current="page">Ollama models</span>
+  </nav>
+
+  <header>
+    <h1>Ollama models</h1>
+    <p class="lede">
+      Assign models for scene prose (writer), analysis (critic), agentic JSON edits (agent), world-building features,
+      and narrative state JSON (pre-state / post-state). Pull library tags or import a GGUF from a URL (Docker: shared
+      import volume required). Changes are logged below.
+    </p>
+  </header>
+
+  @if (inlineError) {
+    <p class="inline-error">{{ inlineError }}</p>
+  }
+
+  @if (loading) {
+    <p>Loading…</p>
+  } @else if (loadFailed) {
+    <div class="panel load-failure">
+      <h2>Could not load settings</h2>
+      <p class="hint">
+        The browser must reach the Creative Longform API. This page uses
+        <code>{{ apiTargetDisplay }}</code>
+        (see <code>web/src/environments/environment.ts</code> when running <code>ng serve</code>).
+      </p>
+      <button type="button" class="primary" (click)="reload()" title="Reload settings from the API">Retry</button>
+    </div>
+  } @else if (prefs) {
+    @if (prefs.ollamaListError) {
+      <p class="warn">Could not list installed models: {{ prefs.ollamaListError }}</p>
+    }
+
+    <div class="panel">
+      <h2>Effective assignments</h2>
+      <p class="hint">
+        Values here are what the API uses. Clearing a slot falls back to appsettings / environment defaults (e.g.
+        OLLAMA_MODEL).
+      </p>
+      <div class="grid">
+        <label [attr.title]="help.writer">
+          Writer (draft, expansion, repairs)
+          <input type="text" [(ngModel)]="writerInput" [disabled]="busy" [attr.title]="help.writer" />
+          <button type="button" class="linkish" (click)="clearSlot('writer')" [disabled]="busy" [title]="help.useDefaultWriter">
+            Use default
+          </button>
+        </label>
+        <label [attr.title]="help.critic">
+          Critic (compliance, quality, transition)
+          <input type="text" [(ngModel)]="criticInput" [disabled]="busy" [attr.title]="help.critic" />
+          <button type="button" class="linkish" (click)="clearSlot('critic')" [disabled]="busy" [title]="help.useDefaultCritic">
+            Use default
+          </button>
+        </label>
+        <label [attr.title]="help.agent">
+          Agent (agentic edit JSON loop)
+          <input type="text" [(ngModel)]="agentInput" [disabled]="busy" [attr.title]="help.agent" />
+          <button type="button" class="linkish" (click)="clearSlot('agent')" [disabled]="busy" [title]="help.useDefaultAgent">
+            Use default
+          </button>
+        </label>
+        <label [attr.title]="help.worldBuilding">
+          World-building (glossary, canon, suggestions)
+          <input type="text" [(ngModel)]="worldBuildingInput" [disabled]="busy" [attr.title]="help.worldBuilding" />
+          <button
+            type="button"
+            class="linkish"
+            (click)="clearSlot('worldBuilding')"
+            [disabled]="busy"
+            [title]="help.useDefaultWorldBuilding"
+          >
+            Use default
+          </button>
+        </label>
+        <label [attr.title]="help.preState">
+          Pre-state (beginning narrative JSON)
+          <input type="text" [(ngModel)]="preStateInput" [disabled]="busy" [attr.title]="help.preState" />
+          <button type="button" class="linkish" (click)="clearSlot('preState')" [disabled]="busy" [title]="help.useDefaultPreState">
+            Use default
+          </button>
+        </label>
+        <label [attr.title]="help.postState">
+          Post-state (end narrative JSON from prose)
+          <input type="text" [(ngModel)]="postStateInput" [disabled]="busy" [attr.title]="help.postState" />
+          <button type="button" class="linkish" (click)="clearSlot('postState')" [disabled]="busy" [title]="help.useDefaultPostState">
+            Use default
+          </button>
+        </label>
+      </div>
+      <button type="button" class="primary" (click)="save()" [disabled]="busy" [title]="help.saveAssignments">
+        Save assignments
+      </button>
+    </div>
+
+    @if (prefs.installedModels.length > 0) {
+      <div class="panel">
+        <h2>Installed in Ollama</h2>
+        <p class="hint" title="Hover the tag or letter buttons for what each control does.">
+          Click a tag to set Writer only, or use the letter buttons to assign this tag to a role. Then Save assignments.
+        </p>
+        <ul class="tag-list">
+          @for (name of prefs.installedModels; track name) {
+            <li>
+              <button
+                type="button"
+                class="tag"
+                (click)="writerInput = name"
+                [disabled]="busy"
+                [title]="help.tagSetWriter"
+              >
+                {{ name }}
+              </button>
+              <span class="quick">
+                <button type="button" (click)="pickInstalled(name, 'writer')" [disabled]="busy" [title]="help.tagPickWriter">
+                  W
+                </button>
+                <button type="button" (click)="pickInstalled(name, 'critic')" [disabled]="busy" [title]="help.tagPickCritic">
+                  C
+                </button>
+                <button type="button" (click)="pickInstalled(name, 'agent')" [disabled]="busy" [title]="help.tagPickAgent">
+                  A
+                </button>
+                <button
+                  type="button"
+                  (click)="pickInstalled(name, 'worldBuilding')"
+                  [disabled]="busy"
+                  [title]="help.tagPickWorldBuilding"
+                >
+                  WB
+                </button>
+                <button type="button" (click)="pickInstalled(name, 'preState')" [disabled]="busy" [title]="help.tagPickPreState">
+                  Pr
+                </button>
+                <button type="button" (click)="pickInstalled(name, 'postState')" [disabled]="busy" [title]="help.tagPickPostState">
+                  Po
+                </button>
+              </span>
+            </li>
+          }
+        </ul>
+      </div>
+    }
+
+    <div class="panel">
+      <h2>Pull from library</h2>
+      <p class="hint">Runs <code>ollama pull</code> on the server (can take a long time for large models).</p>
+      <div class="row">
+        <input
+          type="text"
+          [(ngModel)]="pullModel"
+          placeholder="e.g. llama3.2"
+          [disabled]="busy"
+          [attr.title]="help.pullModel"
+        />
+        <button type="button" (click)="runPull()" [disabled]="busy" [title]="help.pullButton">Pull</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Import GGUF from URL</h2>
+      <p class="hint">
+        Downloads the file into the API staging directory and runs <code>ollama create</code>. Requires Docker volume
+        <code>Ollama:ImportStagingDirectory</code> shared with the Ollama container (see compose).
+      </p>
+      <div class="grid">
+        <label>
+          HTTPS URL
+          <input
+            type="url"
+            [(ngModel)]="importUrl"
+            placeholder="https://…/model.gguf"
+            [disabled]="busy"
+            [attr.title]="help.importUrl"
+          />
+        </label>
+        <label>
+          Model name (registered in Ollama)
+          <input
+            type="text"
+            [(ngModel)]="importName"
+            placeholder="my-custom-model"
+            [disabled]="busy"
+            [attr.title]="help.importName"
+          />
+        </label>
+      </div>
+      <button type="button" (click)="runImportUrl()" [disabled]="busy" [title]="help.importButton">Download &amp; register</button>
+    </div>
+
+    @if (logRows.length > 0) {
+      <div class="panel">
+        <h2>Change log</h2>
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Role</th>
+              <th>Previous</th>
+              <th>New</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of logRows; track row.id) {
+              <tr>
+                <td [attr.title]="row.occurredAt">{{ row.occurredAt | date: 'medium' }}</td>
+                <td>{{ roleLabel(row.role) }}</td>
+                <td>{{ row.previousModel ?? '—' }}</td>
+                <td>{{ row.newModel }}</td>
+                <td>{{ row.source }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  }
+</section>

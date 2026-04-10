@@ -38,6 +38,8 @@ export class GenerationService {
       idempotencyKey?: string | null;
       stopAfterDraft?: boolean;
       minWordsOverride?: number | null;
+      /** Upper bound for the draft length band in prompts (optional; server derives from min when omitted). */
+      maxWordsOverride?: number | null;
       /** Skips LLM prose quality loop; compliance still runs. */
       skipQualityGate?: boolean;
       /** 0–100; at or above: no automated quality repair. Default from server config. */
@@ -50,6 +52,7 @@ export class GenerationService {
       idempotencyKey: opts?.idempotencyKey ?? null,
       stopAfterDraft: opts?.stopAfterDraft ?? false,
       minWordsOverride: opts?.minWordsOverride ?? null,
+      maxWordsOverride: opts?.maxWordsOverride ?? null,
       skipQualityGate: opts?.skipQualityGate ?? false,
       qualityAcceptMinScore: opts?.qualityAcceptMinScore ?? null,
       qualityReviewOnlyMinScore: opts?.qualityReviewOnlyMinScore ?? null

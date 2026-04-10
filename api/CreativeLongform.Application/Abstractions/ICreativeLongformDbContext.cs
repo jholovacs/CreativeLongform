@@ -16,6 +16,8 @@ public interface ICreativeLongformDbContext
     DbSet<WorldElementLink> WorldElementLinks { get; }
     DbSet<SceneWorldElement> SceneWorldElements { get; }
     DbSet<TimelineEntry> TimelineEntries { get; }
+    DbSet<OllamaModelPreferences> OllamaModelPreferences { get; }
+    DbSet<OllamaModelChangeLog> OllamaModelChangeLogs { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

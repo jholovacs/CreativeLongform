@@ -3,6 +3,7 @@ using System;
 using CreativeLongform.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace CreativeLongform.Infrastructure.Migrations
 {
     [DbContext(typeof(CreativeLongformDbContext))]
-    partial class CreativeLongformDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260410025349_OllamaModelPreferencesAndChangeLog")]
+    partial class OllamaModelPreferencesAndChangeLog
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -278,14 +281,6 @@ namespace CreativeLongform.Infrastructure.Migrations
                         .HasColumnType("character varying(256)");
 
                     b.Property<string>("CriticModel")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<string>("PostStateModel")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<string>("PreStateModel")
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
 

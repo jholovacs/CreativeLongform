@@ -75,15 +75,13 @@ export class NewStoryComponent {
               }
               void this.router.navigate(['/book', created.id]);
             },
-            error: (e) => {
-              this.error = e?.message ?? 'World generation failed. You can generate from the story page.';
+            error: () => {
               this.busy = false;
               void this.router.navigate(['/book', created.id]);
             }
           });
         },
-        error: (e) => {
-          this.error = e?.message ?? 'Could not create story.';
+        error: () => {
           this.busy = false;
         }
       });

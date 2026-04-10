@@ -24,7 +24,7 @@
   </div>
 
   @if (error) {
-    <p class="error">{{ error }}</p>
+    <p class="inline-msg">{{ error }}</p>
   }
 
   @if (books.length === 0) {
@@ -438,11 +438,37 @@
         </summary>
         <div class="collapsible-inner">
           <p class="hint">
-            Runs the full agentic pipeline (pre-state, draft, agent edits, compliance, quality) then pauses for your review. Target
-            ~1500–2000 words. When you generate, your current World Elements for This Scene checkboxes are saved first, then the
-            model receives a &quot;Linked world-building&quot; section (titles, summaries, and relationship lines between linked
-            pairs) or an explicit note when none are checked.
+            Runs the full agentic pipeline (pre-state, draft, agent edits, compliance, quality) then pauses for your review. Set
+            the target word range below for the draft writer pass. When you generate, your current World Elements for This Scene
+            checkboxes are saved first, then the model receives a &quot;Linked world-building&quot; section (titles, summaries,
+            and relationship lines between linked pairs) or an explicit note when none are checked.
           </p>
+          <div class="quality-thresholds draft-word-range">
+            <span class="quality-label">Target draft length (words)</span>
+            <input
+              id="draft-min-words"
+              type="number"
+              min="100"
+              max="20000"
+              step="50"
+              [(ngModel)]="draftTargetMinWords"
+              (ngModelChange)="onDraftWordRangeChange()"
+              [disabled]="busy"
+              [title]="fieldHelp.draftTargetMinWords"
+            />
+            <span class="range-sep" aria-hidden="true">–</span>
+            <input
+              id="draft-max-words"
+              type="number"
+              min="100"
+              max="20000"
+              step="50"
+              [(ngModel)]="draftTargetMaxWords"
+              (ngModelChange)="onDraftWordRangeChange()"
+              [disabled]="busy"
+              [title]="fieldHelp.draftTargetMaxWords"
+            />
+          </div>
           <div class="quality-thresholds">
             <label class="quality-label" for="qa-accept">Quality: no automated repair at score ≥</label>
             <input

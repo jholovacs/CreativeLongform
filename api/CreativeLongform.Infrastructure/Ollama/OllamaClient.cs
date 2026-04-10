@@ -53,8 +53,11 @@ public sealed class OllamaClient : IOllamaClient
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             var hint =
-                $"Ollama returned 404 for model '{model}'. Pull it (e.g. docker compose exec ollama ollama pull {model}) " +
-                "or set Ollama__WriterModel / Ollama__CriticModel and OLLAMA_MODEL to a tag that exists (see ollama list in the container).";
+                $"Ollama returned 404 for model '{model}' — nothing is registered under that name. " +
+                "Check: docker compose exec ollama ollama list. " +
+                "Library models (e.g. llama3.2) are installed with: ollama pull <tag>; " +
+                "custom GGUF names from setup are created with ollama create (not pull) — if the import failed, re-run make setup or " +
+                "align OLLAMA_MODEL in .env with a name that appears in ollama list, then recreate the API container.";
             throw new InvalidOperationException(hint);
         }
 

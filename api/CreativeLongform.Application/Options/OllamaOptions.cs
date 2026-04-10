@@ -8,6 +8,24 @@ public sealed class OllamaOptions
     public string WriterModel { get; set; } = "llama3.2";
     public string CriticModel { get; set; } = "llama3.2";
 
+    /// <summary>Default agentic-edit model when DB preference is unset; null means use <see cref="WriterModel"/>.</summary>
+    public string? AgentModel { get; set; }
+
+    /// <summary>Default world-building LLM when DB preference is unset; null means use <see cref="WriterModel"/>.</summary>
+    public string? WorldBuildingModel { get; set; }
+
+    /// <summary>Pre-state JSON when DB preference is unset; null means use <see cref="WriterModel"/>.</summary>
+    public string? PreStateModel { get; set; }
+
+    /// <summary>Post-state JSON when DB preference is unset; null means use <see cref="WriterModel"/>.</summary>
+    public string? PostStateModel { get; set; }
+
+    /// <summary>
+    /// Host path shared with the Ollama container for GGUF staging (URL import). Same path must be mounted in both services
+    /// (e.g. /shared/import). Empty = URL import disabled.
+    /// </summary>
+    public string ImportStagingDirectory { get; set; } = "";
+
     /// <summary>Minimum word count for scene drafts (long-form fiction).</summary>
     public int DraftMinWords { get; set; } = 600;
 

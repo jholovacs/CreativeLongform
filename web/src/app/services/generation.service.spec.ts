@@ -25,6 +25,7 @@ describe('GenerationService', () => {
       idempotencyKey: 'key-1',
       stopAfterDraft: false,
       minWordsOverride: null,
+      maxWordsOverride: null,
       skipQualityGate: false,
       qualityAcceptMinScore: null,
       qualityReviewOnlyMinScore: null

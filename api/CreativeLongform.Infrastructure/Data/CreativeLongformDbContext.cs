@@ -23,6 +23,8 @@ public sealed class CreativeLongformDbContext : DbContext, ICreativeLongformDbCo
     public DbSet<WorldElementLink> WorldElementLinks => Set<WorldElementLink>();
     public DbSet<SceneWorldElement> SceneWorldElements => Set<SceneWorldElement>();
     public DbSet<TimelineEntry> TimelineEntries => Set<TimelineEntry>();
+    public DbSet<OllamaModelPreferences> OllamaModelPreferences => Set<OllamaModelPreferences>();
+    public DbSet<OllamaModelChangeLog> OllamaModelChangeLogs => Set<OllamaModelChangeLog>();
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
@@ -218,6 +220,26 @@ public sealed class CreativeLongformDbContext : DbContext, ICreativeLongformDbCo
             e.Property(x => x.VerdictJson).HasColumnType("jsonb");
             e.HasOne(x => x.GenerationRun).WithMany(x => x.ComplianceEvaluations).HasForeignKey(x => x.GenerationRunId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<OllamaModelPreferences>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.WriterModel).HasMaxLength(256);
+            e.Property(x => x.CriticModel).HasMaxLength(256);
+            e.Property(x => x.AgentModel).HasMaxLength(256);
+            e.Property(x => x.WorldBuildingModel).HasMaxLength(256);
+            e.Property(x => x.PreStateModel).HasMaxLength(256);
+            e.Property(x => x.PostStateModel).HasMaxLength(256);
+        });
+
+        modelBuilder.Entity<OllamaModelChangeLog>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.NewModel).HasMaxLength(256);
+            e.Property(x => x.PreviousModel).HasMaxLength(256);
+            e.Property(x => x.Source).HasMaxLength(64);
+            e.HasIndex(x => x.OccurredAt);
         });
     }
 }

@@ -15,6 +15,7 @@ builder.Services.AddCors(options =>
     {
         policy.WithOrigins(
                 "http://localhost:4200",
+                "http://127.0.0.1:4200",
                 "http://localhost:8080",
                 "http://127.0.0.1:8080")
             .AllowAnyHeader()
@@ -24,6 +25,7 @@ builder.Services.AddCors(options =>
 });
 
 builder.Services.AddSingleton<IGenerationProgressNotifier, SignalRGenerationProgressNotifier>();
+builder.Services.AddHttpClient();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddSignalR(options =>
 {

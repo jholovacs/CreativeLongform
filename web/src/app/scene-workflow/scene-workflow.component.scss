@@ -50,7 +50,7 @@
     margin-bottom: 1rem;
   }
 
-  .error {
+  .inline-msg {
     color: var(--danger);
   }
 
@@ -283,6 +283,15 @@
     input[type='number'] {
       width: 4.25rem;
       padding: 0.35rem 0.5rem;
+    }
+
+    &.draft-word-range input[type='number'] {
+      width: 5rem;
+    }
+
+    .range-sep {
+      color: var(--muted);
+      user-select: none;
     }
   }
 

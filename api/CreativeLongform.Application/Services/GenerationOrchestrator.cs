@@ -142,6 +142,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             MaxRepairIterations = 5,
             StopAfterDraft = options?.StopAfterDraft ?? false,
             MinWordsOverride = options?.MinWordsOverride,
+            MaxWordsOverride = options?.MaxWordsOverride,
             SkipQualityGate = !_ollamaOptions.Value.QualityGateEnabled || (options?.SkipQualityGate == true)
         };
         ApplyQualityThresholdsToRun(run, options, _ollamaOptions.Value);
@@ -188,8 +189,10 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         var db = scope.ServiceProvider.GetRequiredService<ICreativeLongformDbContext>();
         var ollama = scope.ServiceProvider.GetRequiredService<IOllamaClient>();
         var notifier = scope.ServiceProvider.GetRequiredService<IGenerationProgressNotifier>();
-        var writer = _ollamaOptions.Value.WriterModel;
-        var critic = _ollamaOptions.Value.CriticModel;
+        var modelPrefs = scope.ServiceProvider.GetRequiredService<IOllamaModelPreferencesService>();
+        var writer = await modelPrefs.GetWriterModelAsync(cancellationToken);
+        var critic = await modelPrefs.GetCriticModelAsync(cancellationToken);
+        var postStateModel = await modelPrefs.GetPostStateModelAsync(cancellationToken);
         var finalizeSw = Stopwatch.StartNew();
 
         var run = await db.GenerationRuns
@@ -241,7 +244,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         {
             await NotifyStepAsync(notifier, generationRunId, PipelineStep.PostState, finalizeProgress.ElapsedMs,
                 "Finalize: deriving post-scene state from accepted prose (merged from scene start state).", cancellationToken);
-            stateAfter = await GeneratePostStateAsync(db, ollama, writer, run, scene, stateBefore, draft, worldBlock, finalizeProgress, cancellationToken);
+            stateAfter = await GeneratePostStateAsync(db, ollama, postStateModel, run, scene, stateBefore, draft, worldBlock, finalizeProgress, cancellationToken);
             await SaveSnapshotAsync(db, generationRunId, PipelineStep.PostState, stateAfter, cancellationToken);
         }
 
@@ -283,7 +286,12 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         await using var scope = _scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ICreativeLongformDbContext>();
         var ollama = scope.ServiceProvider.GetRequiredService<IOllamaClient>();
-        var writer = _ollamaOptions.Value.WriterModel;
+        var modelPrefs = scope.ServiceProvider.GetRequiredService<IOllamaModelPreferencesService>();
+        var notifier = scope.ServiceProvider.GetRequiredService<IGenerationProgressNotifier>();
+        var writer = await modelPrefs.GetWriterModelAsync(cancellationToken);
+        var postStateModel = await modelPrefs.GetPostStateModelAsync(cancellationToken);
+        var correctSw = Stopwatch.StartNew();
+        var correctProgress = new PipelineProgress(notifier, () => correctSw.ElapsedMilliseconds);
 
         var run = await db.GenerationRuns
             .Include(r => r.Scene)
@@ -327,13 +335,16 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             .FirstOrDefaultAsync(cancellationToken);
         var stateBeforeJson = preSnap?.StateJson ?? "{}";
 
+        await notifier.NotifyAsync(generationRunId, "StepStarted", nameof(PipelineStep.Draft),
+            $"Correcting draft with model «{writer}» (user instruction).", cancellationToken,
+            correctSw.ElapsedMilliseconds, null, null, null);
         var text = await RepairDraftWithUserInstructionAsync(db, ollama, writer, run, scene, draft, ins, worldBlock,
-            stateBeforeJson, selectionStart, selectionEnd, cancellationToken);
+            stateBeforeJson, selectionStart, selectionEnd, cancellationToken, correctProgress);
         run.FinalDraftText = text;
         scene.LatestDraftText = text;
         await db.SaveChangesAsync(cancellationToken);
 
-        var postState = await GeneratePostStateAsync(db, ollama, writer, run, scene, stateBeforeJson, text, worldBlock, progress: null, cancellationToken);
+        var postState = await GeneratePostStateAsync(db, ollama, postStateModel, run, scene, stateBeforeJson, text, worldBlock, progress: null, cancellationToken);
         await SaveSnapshotAsync(db, generationRunId, PipelineStep.PostState, postState, cancellationToken);
         scene.PendingPostStateJson = postState;
         await db.SaveChangesAsync(cancellationToken);
@@ -345,8 +356,12 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         var db = scope.ServiceProvider.GetRequiredService<ICreativeLongformDbContext>();
         var ollama = scope.ServiceProvider.GetRequiredService<IOllamaClient>();
         var notifier = scope.ServiceProvider.GetRequiredService<IGenerationProgressNotifier>();
-        var writer = _ollamaOptions.Value.WriterModel;
-        var critic = _ollamaOptions.Value.CriticModel;
+        var modelPrefs = scope.ServiceProvider.GetRequiredService<IOllamaModelPreferencesService>();
+        var writer = await modelPrefs.GetWriterModelAsync(cancellationToken);
+        var critic = await modelPrefs.GetCriticModelAsync(cancellationToken);
+        var agentModel = await modelPrefs.GetAgentModelAsync(cancellationToken);
+        var preStateModel = await modelPrefs.GetPreStateModelAsync(cancellationToken);
+        var postStateModel = await modelPrefs.GetPostStateModelAsync(cancellationToken);
         var pipelineSw = Stopwatch.StartNew();
         var progress = new PipelineProgress(notifier, () => pipelineSw.ElapsedMilliseconds);
 
@@ -382,15 +397,19 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             var scopedLinks = await LoadSceneScopedWorldElementLinksAsync(db, worldElementIds, cancellationToken);
             var worldBlock = WorldContextBuilder.Build(book, worldElements, scopedLinks);
             var minWords = Math.Max(100, run.MinWordsOverride ?? _ollamaOptions.Value.DraftMinWords);
+            var defaultMaxTarget = Math.Min(2000, Math.Max(minWords, 1500));
+            var maxTargetWords = run.MaxWordsOverride ?? defaultMaxTarget;
+            if (maxTargetWords < minWords)
+                maxTargetWords = minWords;
 
             await NotifyStepAsync(notifier, runId, PipelineStep.PreState, progress.ElapsedMs,
                 "Pre-state: resolving beginning narrative state (author JSON, prior scene, or LLM).", cancellationToken);
-            var stateBefore = await ResolveBeginningStateAsync(db, ollama, writer, run, scene, worldBlock, runId, progress, cancellationToken);
+            var stateBefore = await ResolveBeginningStateAsync(db, ollama, preStateModel, run, scene, worldBlock, runId, progress, cancellationToken);
             await SaveSnapshotAsync(db, runId, PipelineStep.PreState, stateBefore, cancellationToken);
 
             await NotifyStepAsync(notifier, runId, PipelineStep.Draft, progress.ElapsedMs,
-                "Draft: asking the writer model to produce the scene prose.", cancellationToken);
-            var draft = await GenerateDraftAsync(db, ollama, writer, run, scene, stateBefore, worldBlock, minWords, progress, cancellationToken);
+                $"Draft: asking model «{writer}» to produce the scene prose.", cancellationToken);
+            var draft = await GenerateDraftAsync(db, ollama, writer, run, scene, stateBefore, worldBlock, minWords, maxTargetWords, progress, cancellationToken);
 
             if (_ollamaOptions.Value.AgenticEditEnabled && _ollamaOptions.Value.AgenticEditMaxTurns > 0)
             {
@@ -408,7 +427,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
                     async (system, user, ct) =>
                     {
                         var o = new OllamaChatOptions { NumPredict = agentPredict };
-                        return await ChatAndLogAsync(db, ollama, writer, run.Id, PipelineStep.AgentEdit, system, user,
+                        return await ChatAndLogAsync(db, ollama, agentModel, run.Id, PipelineStep.AgentEdit, system, user,
                             jsonFormat: true, o, ct, progress, "Agent edit turn (JSON tools)");
                     },
                     notifier,
@@ -421,7 +440,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             {
                 await NotifyStepAsync(notifier, runId, PipelineStep.PostState, progress.ElapsedMs,
                     "Post-state: deriving narrative state from the finished prose.", cancellationToken);
-                var stateAfter = await GeneratePostStateAsync(db, ollama, writer, run, scene, stateBefore, draft, worldBlock, progress, cancellationToken);
+                var stateAfter = await GeneratePostStateAsync(db, ollama, postStateModel, run, scene, stateBefore, draft, worldBlock, progress, cancellationToken);
                 await SaveSnapshotAsync(db, runId, PipelineStep.PostState, stateAfter, cancellationToken);
 
                 await NotifyStepAsync(notifier, runId, PipelineStep.TransitionCheck, progress.ElapsedMs,
@@ -445,14 +464,14 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
                 repairAttempt++;
                 await NotifyStepAsync(notifier, runId, PipelineStep.Repair, progress.ElapsedMs,
-                    $"Repair (compliance): revision pass {repairAttempt} of {run.MaxRepairIterations}.", cancellationToken);
+                    $"Repair (compliance): revision pass {repairAttempt} of {run.MaxRepairIterations} (draft model «{writer}»).", cancellationToken);
                 await notifier.NotifyAsync(runId, "RepairAttempt", PipelineStep.Repair.ToString(),
-                    $"Addressing compliance issues — attempt {repairAttempt}.", cancellationToken,
+                    $"Addressing compliance issues — attempt {repairAttempt} (draft model «{writer}»).", cancellationToken,
                     progress.ElapsedMs(), null, null);
                 text = await RepairDraftForComplianceAsync(db, ollama, writer, run, text, lastCompliance, worldBlock, minWords, progress, cancellationToken);
                 if (!run.StopAfterDraft)
                 {
-                    var newAfter = await GeneratePostStateAsync(db, ollama, writer, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
+                    var newAfter = await GeneratePostStateAsync(db, ollama, postStateModel, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
                     await SaveSnapshotAsync(db, runId, PipelineStep.PostState, newAfter, cancellationToken);
                 }
             }
@@ -478,9 +497,9 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
                     qualityRepairAttempt++;
                     await NotifyStepAsync(notifier, runId, PipelineStep.Repair, progress.ElapsedMs,
-                        $"Repair (quality): revision pass {qualityRepairAttempt} of {run.MaxRepairIterations} (score {q:0.#} < {reviewMin:0.#}).", cancellationToken);
+                        $"Repair (quality): revision pass {qualityRepairAttempt} of {run.MaxRepairIterations} (score {q:0.#} < {reviewMin:0.#}; draft model «{writer}»).", cancellationToken);
                     await notifier.NotifyAsync(runId, "RepairAttempt", PipelineStep.Repair.ToString(),
-                        $"Addressing quality feedback — attempt {qualityRepairAttempt}.", cancellationToken,
+                        $"Addressing quality feedback — attempt {qualityRepairAttempt} (draft model «{writer}»).", cancellationToken,
                         progress.ElapsedMs(), null, null);
                     text = await RepairDraftForQualityAsync(db, ollama, writer, run, scene, stateBefore, text, lastQuality, worldBlock, minWords, progress, cancellationToken);
                 }
@@ -503,7 +522,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             {
                 await NotifyStepAsync(notifier, runId, PipelineStep.PostState, progress.ElapsedMs,
                     "Post-state: deriving end-of-scene narrative table from the draft (for review).", cancellationToken);
-                var postStateForReview = await GeneratePostStateAsync(db, ollama, writer, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
+                var postStateForReview = await GeneratePostStateAsync(db, ollama, postStateModel, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
                 await SaveSnapshotAsync(db, runId, PipelineStep.PostState, postStateForReview, cancellationToken);
                 scene.PendingPostStateJson = postStateForReview;
                 await db.SaveChangesAsync(cancellationToken);
@@ -650,7 +669,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
     private async Task<string> ResolveBeginningStateAsync(
         ICreativeLongformDbContext db,
         IOllamaClient ollama,
-        string model,
+        string preStateModel,
         GenerationRun run,
         Scene scene,
         string worldBlock,
@@ -678,9 +697,9 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
         var sameScenePrior = await GetLatestSucceededPostStateJsonAsync(db, scene.Id, runId, cancellationToken);
         await notifier.NotifyAsync(runId, "StepStarted", "BeginningState",
-            "No author or prior-scene state — asking the writer model to infer pre-scene JSON.", cancellationToken,
+            "No author or prior-scene state — asking the pre-state model to infer pre-scene JSON.", cancellationToken,
             progress.ElapsedMs(), null, null);
-        return await GeneratePreStateAsync(db, ollama, model, run, scene, sameScenePrior, worldBlock, progress, cancellationToken);
+        return await GeneratePreStateAsync(db, ollama, preStateModel, run, scene, sameScenePrior, worldBlock, progress, cancellationToken);
     }
 
     private static string SceneInstructionsForAgent(Scene scene)
@@ -749,12 +768,12 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         string stateBeforeJson,
         string worldContextBlock,
         int minWords,
+        int maxTargetWords,
         PipelineProgress progress,
         CancellationToken cancellationToken)
     {
         var numPredict = Math.Max(1024, _ollamaOptions.Value.DraftNumPredict);
         var proseOptions = new OllamaChatOptions { NumPredict = numPredict };
-        var targetBand = Math.Min(2000, Math.Max(minWords, 1500));
 
         var system =
             """
@@ -785,7 +804,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
             {worldContextBlock}
 
-            Write the complete scene. Target roughly {minWords}–{targetBand} words for this session unless the brief explicitly demands a shorter piece.
+            Write the complete scene. Target roughly {minWords}–{maxTargetWords} words for this session unless the brief explicitly demands a shorter piece.
             """;
         var (text, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Draft, system, user, jsonFormat: false, proseOptions, cancellationToken: cancellationToken, progress,
             "Write scene draft (prose)");
@@ -1257,7 +1276,8 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         string stateBeforeJson,
         int? selectionStart,
         int? selectionEnd,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        PipelineProgress? progress = null)
     {
         var proseOptions = new OllamaChatOptions { NumPredict = Math.Max(1024, _ollamaOptions.Value.DraftNumPredict) };
         var perspective = scene.NarrativePerspective ?? "(infer from story tone if not specified)";
@@ -1305,7 +1325,8 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
                 {worldContextBlock}
                 """;
             var (text, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Repair, system, user,
-                jsonFormat: true, proseOptions, cancellationToken: cancellationToken);
+                jsonFormat: true, proseOptions, cancellationToken: cancellationToken, progress,
+                "Correct draft (selection replacement JSON)");
             var parsed = LlmJson.Deserialize<DraftReplacementJson>(text)
                          ?? throw new InvalidOperationException("Model did not return valid replacement JSON.");
             var replacement = parsed.Replacement ?? "";
@@ -1333,7 +1354,8 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             {worldContextBlock}
             """;
         var (textFull, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Repair, systemFull, userFull,
-            jsonFormat: false, proseOptions, cancellationToken: cancellationToken);
+            jsonFormat: false, proseOptions, cancellationToken: cancellationToken, progress,
+            "Correct draft (full revision)");
         return textFull.Trim();
     }
 

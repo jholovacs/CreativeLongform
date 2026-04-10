@@ -15,7 +15,6 @@ export class HomeComponent implements OnInit {
   private readonly odata = inject(ODataService);
 
   books: Book[] = [];
-  error: string | null = null;
   loading = true;
 
   ngOnInit(): void {
@@ -23,15 +22,13 @@ export class HomeComponent implements OnInit {
   }
 
   load(): void {
-    this.error = null;
     this.loading = true;
     this.odata.getBooksWithScenes().subscribe({
       next: (res) => {
         this.books = res.value ?? [];
         this.loading = false;
       },
-      error: (e) => {
-        this.error = e?.message ?? 'Failed to load stories.';
+      error: () => {
         this.loading = false;
       }
     });
