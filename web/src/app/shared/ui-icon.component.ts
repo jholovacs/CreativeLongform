@@ -16,6 +16,7 @@ export type UiIconName =
   | 'plus'
   | 'pencil'
   | 'save'
+  | 'search'
   | 'sparkles'
   | 'x';
 
@@ -96,6 +97,12 @@ export type UiIconName =
           <path
             d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8"
           />
+        }
+        @case ('search') {
+          <g>
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.3-4.3" />
+          </g>
         }
         @case ('sparkles') {
           <path

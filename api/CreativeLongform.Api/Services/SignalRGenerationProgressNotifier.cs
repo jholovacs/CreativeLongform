@@ -21,8 +21,7 @@ public sealed class SignalRGenerationProgressNotifier : IGenerationProgressNotif
         CancellationToken cancellationToken = default,
         long? elapsedMsSinceRunStart = null,
         long? stepDurationMs = null,
-        string? llmResponsePreview = null,
-        string? llmRequestPayload = null)
+        Guid? llmCallId = null)
     {
         return _hub.Clients.Group(generationRunId.ToString("D")).SendAsync(
             eventName,
@@ -33,8 +32,7 @@ public sealed class SignalRGenerationProgressNotifier : IGenerationProgressNotif
                 detail,
                 elapsedMs = elapsedMsSinceRunStart,
                 stepDurationMs,
-                llmPreview = llmResponsePreview,
-                llmRequest = llmRequestPayload
+                llmCallId
             },
             cancellationToken);
     }

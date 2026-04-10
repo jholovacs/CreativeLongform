@@ -57,7 +57,7 @@ public class AgenticEditLoopTests
             worldBlock: "(none)",
             maxTurns: 3,
             NullLogger.Instance,
-            (_, _, _) => Task.FromResult(("""{"action":"finish","reason":"ok"}""", "")),
+            (_, _, _) => Task.FromResult(("""{"action":"finish","reason":"ok"}""", "", Guid.Empty)),
             new NoopNotifier(),
             Guid.NewGuid(),
             () => 0L,
@@ -82,8 +82,8 @@ public class AgenticEditLoopTests
                 calls++;
                 return Task.FromResult(calls switch
                 {
-                    1 => ("""{"action":"propose_patch","paragraphStart":0,"paragraphEnd":0,"replacement":"New."}""", ""),
-                    _ => ("""{"action":"finish","reason":"done"}""", "")
+                    1 => ("""{"action":"propose_patch","paragraphStart":0,"paragraphEnd":0,"replacement":"New."}""", "", Guid.Empty),
+                    _ => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty)
                 });
             },
             new NoopNotifier(),
@@ -100,7 +100,7 @@ public class AgenticEditLoopTests
     {
         public Task NotifyAsync(Guid generationRunId, string eventName, string? step, string? detail,
             CancellationToken cancellationToken = default, long? elapsedMsSinceRunStart = null,
-            long? stepDurationMs = null, string? llmResponsePreview = null, string? llmRequestPayload = null) =>
+            long? stepDurationMs = null, Guid? llmCallId = null) =>
             Task.CompletedTask;
     }
 }

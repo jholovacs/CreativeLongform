@@ -17,7 +17,7 @@ public interface IGenerationOrchestrator
     /// When <paramref name="selectionStart"/> and <paramref name="selectionEnd"/> are set (end exclusive, like a textarea),
     /// only that range is replaced; <paramref name="currentDraftText"/> should be the full editor text for context.
     /// </summary>
-    Task CorrectDraftAsync(Guid sceneId, Guid generationRunId, string userInstruction,
+    Task<CorrectDraftResult> CorrectDraftAsync(Guid sceneId, Guid generationRunId, string userInstruction,
         string? currentDraftText = null, int? selectionStart = null, int? selectionEnd = null,
         CancellationToken cancellationToken = default);
 }

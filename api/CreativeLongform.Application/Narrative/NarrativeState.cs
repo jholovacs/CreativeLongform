@@ -11,6 +11,14 @@ public sealed class NarrativeState
     [JsonPropertyName("transitionSummary")]
     public string? TransitionSummary { get; set; }
 
+    /// <summary>Post-scene only: short factual bullets — what differs from scene-entry state (no prose excerpts).</summary>
+    [JsonPropertyName("changedFromSceneStart")]
+    public List<string> ChangedFromSceneStart { get; set; } = new();
+
+    /// <summary>Post-scene only: short factual bullets — important facts still true at scene end as at entry.</summary>
+    [JsonPropertyName("unchangedFromSceneStart")]
+    public List<string> UnchangedFromSceneStart { get; set; } = new();
+
     [JsonPropertyName("characters")]
     public List<CharacterState> Characters { get; set; } = new();
 

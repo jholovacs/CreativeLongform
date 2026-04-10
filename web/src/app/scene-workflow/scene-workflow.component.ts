@@ -1,16 +1,17 @@
 import { CommonModule } from '@angular/common';
-import { Component, ElementRef, OnDestroy, OnInit, ViewChild, inject } from '@angular/core';
+import { Component, OnDestroy, OnInit, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { HubConnection } from '@microsoft/signalr';
-import { forkJoin, Subject } from 'rxjs';
+import { forkJoin, Subject, Subscription } from 'rxjs';
 import { concatMap, debounceTime, distinctUntilChanged, takeUntil } from 'rxjs/operators';
-import { applyParagraphReplace } from '../core/draft-paragraph';
+import { formatJsonPretty } from '../core/json-format';
 import { Book, Chapter, Scene, WorldElement } from '../models/entities';
 import { GenerationService, GenerationProgressPayload } from '../services/generation.service';
 import { ODataService } from '../services/odata.service';
-import { DraftRecommendationItem, SceneWorkflowService } from '../services/scene-workflow.service';
+import { SceneWorkflowService } from '../services/scene-workflow.service';
 import { WorldService } from '../services/world.service';
+import { LlmWorkingIndicatorComponent } from '../shared/llm-working-indicator/llm-working-indicator.component';
 import { UiIconComponent } from '../shared/ui-icon.component';
 import { SCENE_WORKFLOW_FIELD_HELP } from './scene-workflow-field-help';
 
@@ -21,9 +22,7 @@ type SceneWorkflowPanelKey =
   | 'voice'
   | 'beginningState'
   | 'worldElements'
-  | 'generate'
-  | 'review'
-  | 'endState';
+  | 'generate';
 
 export type GenerationLogKind = 'phase' | 'llm' | 'agent' | 'repair' | 'run' | 'other';
 
@@ -36,6 +35,10 @@ export interface GenerationLogEntry {
   detail: string;
   elapsedMs?: number | null;
   stepDurationMs?: number | null;
+  /** Server row id; load full text via OData when the user expands the log. */
+  llmCallId?: string | null;
+  llmDetailLoading?: boolean;
+  llmDetailError?: string | null;
   llmPreview?: string | null;
   llmRequest?: string | null;
 }
@@ -49,13 +52,11 @@ interface StoredStoryPosition {
 @Component({
   selector: 'app-scene-workflow',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, UiIconComponent],
+  imports: [CommonModule, FormsModule, RouterLink, UiIconComponent, LlmWorkingIndicatorComponent],
   templateUrl: './scene-workflow.component.html',
   styleUrl: './scene-workflow.component.scss'
 })
 export class SceneWorkflowComponent implements OnInit, OnDestroy {
-  @ViewChild('draftBody') draftBody?: ElementRef<HTMLTextAreaElement>;
-
   /** Native `title` tooltips for form controls. */
   readonly fieldHelp = SCENE_WORKFLOW_FIELD_HELP;
 
@@ -67,15 +68,15 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     voice: true,
     beginningState: false,
     worldElements: true,
-    generate: true,
-    review: true,
-    endState: false
+    generate: true
   };
 
   private readonly odata = inject(ODataService);
   private readonly generation = inject(GenerationService);
   private readonly world = inject(WorldService);
   private readonly sceneWorkflow = inject(SceneWorkflowService);
+  private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
 
   books: Book[] = [];
   selectedBookId = '';
@@ -113,19 +114,15 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   error: string | null = null;
   busy = false;
   generationRunId: string | null = null;
-  awaitingReview = false;
-  draftText = '';
-  correctInstruction = '';
-  lastStateTableJson: string | null = null;
+  /** When set, a run is in AwaitingUserReview — link to the draft workspace. */
+  pendingReviewRunId: string | null = null;
 
-  /** LLM draft analysis (on-demand); proposals are not auto-applied. */
-  draftRecommendations: DraftRecommendationItem[] = [];
-  recommendationsBusy = false;
-  recommendationsError: string | null = null;
-  private static readonly maxDraftCharsForAnalysis = 100_000;
-  /** Last selection in the draft textarea (survives blur when clicking Correct). End index exclusive (UTF-16). */
-  private savedDraftSelectionStart = 0;
-  private savedDraftSelectionEnd = 0;
+  // Unsubscribing cancels in-flight HttpClient requests.
+  private generationStartSub: Subscription | undefined;
+  private suggestSynopsisSub: Subscription | undefined;
+  private llmCallDetailSub: Subscription | undefined;
+  /** Entry currently loading LLM log detail (for teardown on unsubscribe). */
+  private llmCallDetailEntry: GenerationLogEntry | null = null;
 
   /** Quality critic thresholds (0–100); persisted locally; sent with each generation run. */
   qualityAcceptMinScore = 75;
@@ -162,6 +159,13 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.generationStartSub?.unsubscribe();
+    this.suggestSynopsisSub?.unsubscribe();
+    this.llmCallDetailSub?.unsubscribe();
+    if (this.llmCallDetailEntry) {
+      this.llmCallDetailEntry.llmDetailLoading = false;
+      this.llmCallDetailEntry = null;
+    }
     this.destroy$.next();
     this.destroy$.complete();
     void this.hub?.stop();
@@ -190,13 +194,45 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
           }
         }
         this.applyStoryPositionAfterBooksLoad();
+        this.applyPendingQuerySceneId();
         this.syncFormFromScene();
         this.loadSceneWorldData();
         if (this.selectedSceneId) {
           this.loadWorkflowContext();
+          this.refreshPendingReviewRun();
+        } else {
+          this.pendingReviewRunId = null;
         }
       },
       error: () => {}
+    });
+  }
+
+  /** Deep link or return from draft finalize: `?sceneId=` selects the scene. */
+  private applyPendingQuerySceneId(): void {
+    const sid = this.route.snapshot.queryParamMap.get('sceneId');
+    if (!sid) return;
+    const pos = this.findStoryPositionForScene(sid);
+    if (pos) {
+      this.selectedBookId = pos.bookId;
+      this.selectedChapterId = pos.chapterId;
+      this.selectedSceneId = pos.sceneId;
+      void this.router.navigate([], { relativeTo: this.route, queryParams: {}, replaceUrl: true });
+    }
+  }
+
+  private refreshPendingReviewRun(): void {
+    if (!this.selectedSceneId) {
+      this.pendingReviewRunId = null;
+      return;
+    }
+    this.odata.getGenerationRunAwaitingReview(this.selectedSceneId).subscribe({
+      next: (id) => {
+        this.pendingReviewRunId = id;
+      },
+      error: () => {
+        this.pendingReviewRunId = null;
+      }
     });
   }
 
@@ -326,8 +362,6 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.selectedChapterId = ch?.id ?? '';
     const sc = ch?.scenes?.[0];
     this.selectedSceneId = sc?.id ?? '';
-    this.clearDraftRecommendations();
-    this.awaitingReview = false;
     this.generationRunId = null;
     this.worldElementsSkip = 0;
     this.worldElementsSearchQuery = '';
@@ -335,13 +369,12 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.syncFormFromScene();
     this.loadSceneWorldData();
     this.loadWorkflowContext();
+    this.refreshPendingReviewRun();
   }
 
   onChapterChange(): void {
     const sc = this.scenesForChapter()[0];
     this.selectedSceneId = sc?.id ?? '';
-    this.clearDraftRecommendations();
-    this.awaitingReview = false;
     this.generationRunId = null;
     this.worldElementsSkip = 0;
     this.worldElementsSearchQuery = '';
@@ -349,17 +382,17 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.syncFormFromScene();
     this.loadSceneWorldData();
     this.loadWorkflowContext();
+    this.refreshPendingReviewRun();
   }
 
   onSceneChange(): void {
-    this.clearDraftRecommendations();
-    this.awaitingReview = false;
     this.generationRunId = null;
     this.worldElementsSkip = 0;
     this.persistStoryPosition();
     this.syncFormFromScene();
     this.loadSceneWorldData();
     this.loadWorkflowContext();
+    this.refreshPendingReviewRun();
   }
 
   currentScene(): Scene | null {
@@ -423,15 +456,6 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     return `Ready · target ${lo}–${hi} words`;
   }
 
-  get reviewSummary(): string {
-    return 'Draft ready — edit or finalize';
-  }
-
-  get endStateSummary(): string {
-    if (!this.lastStateTableJson?.trim()) return '';
-    return this.truncate(this.lastStateTableJson, 72);
-  }
-
   /** Finalized prose for the selected scene (persists when you generate a new draft on this scene). */
   get sceneManuscript(): string {
     return this.currentScene()?.manuscriptText?.trim() ?? '';
@@ -471,8 +495,6 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
       this.narrativePerspective = '';
       this.narrativeTense = '';
       this.beginningStateJson = '';
-      this.draftText = '';
-      this.lastStateTableJson = null;
       this.chapterComplete = false;
       return;
     }
@@ -481,10 +503,8 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.expectedEnd = s.expectedEndStateNotes ?? '';
     this.narrativePerspective = s.narrativePerspective ?? '';
     this.narrativeTense = s.narrativeTense ?? '';
-    this.beginningStateJson = s.beginningStateJson ?? '';
-    this.draftText = s.latestDraftText ?? '';
+    this.beginningStateJson = formatJsonPretty(s.beginningStateJson ?? '');
     this.chapterComplete = ch?.isComplete ?? false;
-    this.lastStateTableJson = s.pendingPostStateJson ?? s.approvedStateTableJson ?? null;
     this.applyPanelDefaultsFromPersistedSceneFields(s);
   }
 
@@ -511,7 +531,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
           this.narrativeTense = ctx.defaultNarrativeTense;
         }
         if (!this.beginningStateJson.trim() && ctx.previousSceneEndStateJson) {
-          this.beginningStateJson = ctx.previousSceneEndStateJson;
+          this.beginningStateJson = formatJsonPretty(ctx.previousSceneEndStateJson);
         }
       },
       error: () => {
@@ -565,10 +585,11 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
       return;
     }
     this.error = null;
+    this.suggestSynopsisSub?.unsubscribe();
     this.suggestBusy = true;
     this.modalWorkingIds = new Set(this.selectedWorldIds);
     this.modalWorldSearchQuery = '';
-    this.sceneWorkflow.suggestWorldElements(this.selectedBookId, syn).subscribe({
+    this.suggestSynopsisSub = this.sceneWorkflow.suggestWorldElements(this.selectedBookId, syn).subscribe({
       next: (res) => {
         for (const id of res.elementIds ?? []) {
           this.modalWorkingIds.add(id);
@@ -582,6 +603,10 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
         this.suggestBusy = false;
       }
     });
+  }
+
+  cancelSuggestFromSynopsis(): void {
+    this.suggestSynopsisSub?.unsubscribe();
   }
 
   closeSuggestModal(): void {
@@ -893,8 +918,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
       detail,
       elapsedMs: p.elapsedMs ?? null,
       stepDurationMs: p.stepDurationMs ?? null,
-      llmPreview: p.llmPreview ?? null,
-      llmRequest: p.llmRequest ?? null
+      llmCallId: p.llmCallId ?? null
     };
     this.generationLogEntries = [entry, ...this.generationLogEntries];
   }
@@ -1050,6 +1074,36 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     });
   }
 
+  /** Fetches full request/response for a hub row that only carried `llmCallId`. */
+  loadLlmCallDetail(entry: GenerationLogEntry): void {
+    if (!entry.llmCallId || entry.llmDetailLoading) {
+      return;
+    }
+    if (entry.llmRequest != null && entry.llmPreview != null) {
+      return;
+    }
+    if (this.llmCallDetailEntry && this.llmCallDetailEntry !== entry) {
+      this.llmCallDetailEntry.llmDetailLoading = false;
+    }
+    this.llmCallDetailSub?.unsubscribe();
+    entry.llmDetailLoading = true;
+    entry.llmDetailError = null;
+    this.llmCallDetailEntry = entry;
+    this.llmCallDetailSub = this.odata.getLlmCall(entry.llmCallId).subscribe({
+      next: (row) => {
+        entry.llmDetailLoading = false;
+        this.llmCallDetailEntry = null;
+        entry.llmRequest = row.requestJson;
+        entry.llmPreview = row.responseText;
+      },
+      error: () => {
+        entry.llmDetailLoading = false;
+        this.llmCallDetailEntry = null;
+        entry.llmDetailError = 'Could not load this LLM log from the server.';
+      }
+    });
+  }
+
   startGeneration(): void {
     if (!this.selectedSceneId) {
       this.error = 'Select a scene first.';
@@ -1065,17 +1119,17 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
       detail: `Saving scene world links, then starting generation (draft review mode, target ~${this.draftTargetMinWords}–${this.draftTargetMaxWords} words). Waiting for server run id…`,
       elapsedMs: 0,
       stepDurationMs: null,
-      llmPreview: null
+      llmCallId: null
     });
-    this.clearDraftRecommendations();
-    this.awaitingReview = false;
     this.generationRunId = null;
+    this.pendingReviewRunId = null;
     void this.hub?.stop();
 
     const sceneId = this.selectedSceneId;
     this.onQualityThresholdsChange();
     this.onDraftWordRangeChange();
-    this.world
+    this.generationStartSub?.unsubscribe();
+    this.generationStartSub = this.world
       .putSceneWorldElements(sceneId, [...this.selectedWorldIds])
       .pipe(
         concatMap(() =>
@@ -1097,7 +1151,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
             detail: `Connected to generation run ${res.id}. Subscribing to live events…`,
             elapsedMs: null,
             stepDurationMs: null,
-            llmPreview: null
+            llmCallId: null
           });
           this.hub = this.generation.connectToRun(res.id, {
             onProgress: (eventName, p) => this.pushProgressEvent(eventName, p),
@@ -1112,7 +1166,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
             detail: 'Request failed — see error dialog for full details.',
             elapsedMs: null,
             stepDurationMs: null,
-            llmPreview: null
+            llmCallId: null
           });
         }
       });
@@ -1121,24 +1175,39 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   private onGenerationFinished(p: GenerationProgressPayload): void {
     this.pushProgressEvent('RunFinished', p);
     this.busy = false;
+    void this.hub?.stop();
+    this.hub = null;
     const step = p.step;
     if (step === 'AwaitingUserReview') {
-      this.awaitingReview = true;
-      this.odata.getBooksWithScenes().subscribe({
-        next: (res) => {
-          this.books = res.value ?? [];
-          this.syncFormFromScene();
-        }
-      });
-    } else {
-      this.awaitingReview = false;
-      this.loadBooks();
+      const sceneId = this.selectedSceneId;
+      const runId = this.generationRunId;
+      if (sceneId && runId) {
+        void this.router.navigate(['/scenes', sceneId, 'draft'], { state: { generationRunId: runId } });
+      }
+      return;
     }
+    this.loadBooks();
   }
 
   cancelDraftGeneration(): void {
-    if (!this.selectedSceneId || !this.generationRunId) return;
+    this.generationStartSub?.unsubscribe();
+    this.generationStartSub = undefined;
+    if (!this.selectedSceneId) {
+      return;
+    }
     this.error = null;
+    if (!this.generationRunId) {
+      this.busy = false;
+      this.pushProgressEvent('Local', {
+        runId: '',
+        step: 'cancel',
+        detail: 'Request cancelled.',
+        elapsedMs: null,
+        stepDurationMs: null,
+        llmCallId: null
+      });
+      return;
+    }
     this.generation.cancelGeneration(this.selectedSceneId, this.generationRunId).subscribe({
       next: () => {
         this.pushProgressEvent('Local', {
@@ -1147,159 +1216,10 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
           detail: 'Cancellation requested — stopping after the current step completes.',
           elapsedMs: null,
           stepDurationMs: null,
-          llmPreview: null
+          llmCallId: null
         });
       },
       error: () => {}
-    });
-  }
-
-  clearDraftRecommendations(): void {
-    this.draftRecommendations = [];
-    this.recommendationsError = null;
-    this.recommendationsBusy = false;
-  }
-
-  get draftTooLongForAnalysis(): boolean {
-    return this.draftText.length > SceneWorkflowComponent.maxDraftCharsForAnalysis;
-  }
-
-  loadDraftRecommendations(): void {
-    if (!this.selectedSceneId || !this.draftText.trim()) {
-      this.error = 'Need draft text to analyze.';
-      return;
-    }
-    if (this.draftTooLongForAnalysis) {
-      this.error = `Draft exceeds ${SceneWorkflowComponent.maxDraftCharsForAnalysis.toLocaleString()} characters (analysis limit).`;
-      return;
-    }
-    this.recommendationsBusy = true;
-    this.recommendationsError = null;
-    this.error = null;
-    this.sceneWorkflow.getDraftRecommendations(this.selectedSceneId, this.draftText).subscribe({
-      next: (res) => {
-        this.draftRecommendations = res.items ?? [];
-        this.recommendationsBusy = false;
-      },
-      error: (err: unknown) => {
-        this.recommendationsBusy = false;
-        const e = err as { error?: { message?: string } | string; message?: string };
-        const body = e?.error;
-        this.recommendationsError =
-          typeof body === 'string'
-            ? body
-            : body && typeof body === 'object' && 'message' in body
-              ? String((body as { message: string }).message)
-              : e?.message ?? 'Request failed.';
-      }
-    });
-  }
-
-  applyRecommendationReplace(index: number): void {
-    const item = this.draftRecommendations[index];
-    if (!item || item.kind !== 'replace' || !item.replacementText?.trim()) return;
-    this.draftText = applyParagraphReplace(
-      this.draftText,
-      item.paragraphStart,
-      item.paragraphEnd,
-      item.replacementText
-    );
-    this.dismissRecommendationAt(index);
-  }
-
-  useRewriteInstruction(index: number): void {
-    const item = this.draftRecommendations[index];
-    if (!item || item.kind !== 'rewrite' || !item.rewriteInstruction?.trim()) return;
-    this.correctInstruction = item.rewriteInstruction.trim();
-    this.dismissRecommendationAt(index);
-  }
-
-  dismissRecommendationAt(index: number): void {
-    this.draftRecommendations = this.draftRecommendations.filter((_, i) => i !== index);
-  }
-
-  finalizeDraft(): void {
-    if (!this.selectedSceneId || !this.generationRunId) return;
-    this.busy = true;
-    this.error = null;
-    this.generation
-      .finalizeGeneration(this.selectedSceneId, {
-        generationRunId: this.generationRunId,
-        acceptedDraftText: this.draftText,
-        approvedStateTableJson: null
-      })
-      .subscribe({
-        next: (res) => {
-          this.lastStateTableJson = res.stateTableJson;
-          this.awaitingReview = false;
-          this.generationRunId = null;
-          this.busy = false;
-          this.clearDraftRecommendations();
-          this.loadBooks(res.nextSceneId ?? undefined);
-        },
-        error: () => {
-          this.busy = false;
-        }
-      });
-  }
-
-  onDraftBlur(): void {
-    const ta = this.draftBody?.nativeElement;
-    if (!ta) return;
-    this.savedDraftSelectionStart = ta.selectionStart;
-    this.savedDraftSelectionEnd = ta.selectionEnd;
-  }
-
-  runCorrect(): void {
-    if (!this.selectedSceneId || !this.generationRunId) return;
-    const ins = this.correctInstruction.trim();
-    if (!ins) {
-      this.error = 'Enter an instruction for the correction.';
-      return;
-    }
-    this.busy = true;
-    this.error = null;
-    const ta = this.draftBody?.nativeElement;
-    let selectionStart: number | undefined;
-    let selectionEnd: number | undefined;
-    if (ta && document.activeElement === ta && ta.selectionStart !== ta.selectionEnd) {
-      selectionStart = ta.selectionStart;
-      selectionEnd = ta.selectionEnd;
-    } else {
-      const len = this.draftText.length;
-      const s = Math.min(this.savedDraftSelectionStart, len);
-      const e = Math.min(this.savedDraftSelectionEnd, len);
-      if (s >= 0 && e <= len && s < e) {
-        selectionStart = s;
-        selectionEnd = e;
-      }
-    }
-    const body: Parameters<GenerationService['correctDraft']>[1] = {
-      generationRunId: this.generationRunId,
-      instruction: ins,
-      currentDraftText: this.draftText
-    };
-    if (selectionStart !== undefined && selectionEnd !== undefined) {
-      body.selectionStart = selectionStart;
-      body.selectionEnd = selectionEnd;
-    }
-    this.generation.correctDraft(this.selectedSceneId, body).subscribe({
-      next: () => {
-        this.correctInstruction = '';
-        this.odata.getBooksWithScenes().subscribe({
-          next: (res) => {
-            this.books = res.value ?? [];
-            this.syncFormFromScene();
-            this.busy = false;
-          },
-          error: () => {
-            this.busy = false;
-          }
-        });
-      },
-      error: () => {
-        this.busy = false;
-      }
     });
   }
 }

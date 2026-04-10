@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Linq;
 using System.Text;
-using System.Text.Json;
 using System.Threading.Tasks;
 using CreativeLongform.Application.Abstractions;
 using CreativeLongform.Application.Generation;
@@ -18,8 +17,8 @@ public static class AgenticEditLoop
     private const int FullDraftCharBudget = 60_000;
     private const int SummaryPrefixChars = 400;
     private const int MaxReplacementChars = 80_000;
-    /// <summary>Max chars of raw JSON sent on SignalR as llmPreview (full response is always persisted on the generation run LLM call log).</summary>
-    private const int ProgressLlmPreviewMaxChars = 500_000;
+    /// <summary>Max chars of raw model output embedded in tool feedback to the agent (not sent over SignalR).</summary>
+    private const int ToolResultTruncationChars = 12_000;
     private const int ProgressPatchExcerptChars = 7000;
 
     private static readonly string SystemPrompt = """
@@ -50,7 +49,7 @@ public static class AgenticEditLoop
         string worldBlock,
         int maxTurns,
         ILogger logger,
-        Func<string, string, CancellationToken, Task<(string messageText, string raw)>> chatJsonAsync,
+        Func<string, string, CancellationToken, Task<(string messageText, string raw, Guid llmCallId)>> chatJsonAsync,
         IGenerationProgressNotifier notifier,
         Guid runId,
         Func<long> pipelineElapsedMs,
@@ -78,7 +77,7 @@ public static class AgenticEditLoop
                 paragraphingWarning);
 
             var turnSw = Stopwatch.StartNew();
-            var (raw, _) = await chatJsonAsync(SystemPrompt, user, cancellationToken);
+            var (raw, _, llmCallId) = await chatJsonAsync(SystemPrompt, user, cancellationToken);
             turnSw.Stop();
             var cleaned = LlmJson.StripMarkdownFences(raw).Trim();
             AgentEditActionDto? action;
@@ -89,14 +88,13 @@ public static class AgenticEditLoop
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Agentic edit turn {Turn}: invalid JSON", turn);
-                lastToolResult = $"Error: output was not valid JSON. Fix and try again. Raw (truncated): {Truncate(cleaned, ProgressLlmPreviewMaxChars)}";
+                lastToolResult = $"Error: output was not valid JSON. Fix and try again. Raw (truncated): {Truncate(cleaned, ToolResultTruncationChars)}";
                 await notifier.NotifyAsync(runId, "AgentEditTurn", nameof(PipelineStep.AgentEdit),
                     $"Turn {turn}/{maxTurns}: model returned invalid JSON; the editor will retry. ({turnSw.ElapsedMilliseconds} ms for LLM)",
                     cancellationToken,
                     pipelineElapsedMs(),
                     turnSw.ElapsedMilliseconds,
-                    Truncate(cleaned, ProgressLlmPreviewMaxChars),
-                    SerializeAgentLlmPrompt(SystemPrompt, user));
+                    llmCallId);
                 continue;
             }
 
@@ -108,14 +106,11 @@ public static class AgenticEditLoop
                     cancellationToken,
                     pipelineElapsedMs(),
                     turnSw.ElapsedMilliseconds,
-                    Truncate(cleaned, ProgressLlmPreviewMaxChars),
-                    SerializeAgentLlmPrompt(SystemPrompt, user));
+                    llmCallId);
                 continue;
             }
 
             var kind = action.Action.Trim().ToLowerInvariant();
-            var llmPreview = Truncate(cleaned, ProgressLlmPreviewMaxChars);
-            var llmRequest = SerializeAgentLlmPrompt(SystemPrompt, user);
 
             switch (kind)
             {
@@ -124,7 +119,7 @@ public static class AgenticEditLoop
                     await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
                         turnSw.ElapsedMilliseconds,
                         $"Editor finished (agent pass). Why: {Truncate(action.Reason ?? "(no reason)", 400)}",
-                        llmPreview, llmRequest);
+                        llmCallId);
                     return JoinParagraphs(paragraphs);
 
                 case "read_section":
@@ -133,7 +128,7 @@ public static class AgenticEditLoop
                     {
                         lastToolResult = "Error: read_section requires paragraphStart and paragraphEnd (inclusive).";
                         await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"read_section failed — {lastToolResult}", llmPreview, llmRequest);
+                            turnSw.ElapsedMilliseconds, $"read_section failed — {lastToolResult}", llmCallId);
                         break;
                     }
 
@@ -142,7 +137,7 @@ public static class AgenticEditLoop
                         lastToolResult =
                             $"Error: invalid range {rs}..{re} for draft with {paragraphs.Count} paragraphs (valid indices 0..{paragraphs.Count - 1}).";
                         await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"read_section failed — {lastToolResult}", llmPreview, llmRequest);
+                            turnSw.ElapsedMilliseconds, $"read_section failed — {lastToolResult}", llmCallId);
                         break;
                     }
 
@@ -153,7 +148,7 @@ public static class AgenticEditLoop
                     await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
                         turnSw.ElapsedMilliseconds,
                         $"read_section — requested full text for paragraphs {rs}..{re} (inclusive).\nWhy: inspect or prepare before editing.\n\n{Truncate(body, 12_000)}",
-                        llmPreview, llmRequest);
+                        llmCallId);
                     break;
                 }
 
@@ -163,7 +158,7 @@ public static class AgenticEditLoop
                     {
                         lastToolResult = "Error: propose_patch requires paragraphStart and paragraphEnd (inclusive).";
                         await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmPreview, llmRequest);
+                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmCallId);
                         break;
                     }
 
@@ -172,7 +167,7 @@ public static class AgenticEditLoop
                         lastToolResult =
                             $"Error: invalid range {ps}..{pe} for draft with {paragraphs.Count} paragraphs (valid indices 0..{paragraphs.Count - 1}).";
                         await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmPreview, llmRequest);
+                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmCallId);
                         break;
                     }
 
@@ -181,7 +176,7 @@ public static class AgenticEditLoop
                         lastToolResult =
                             $"Error: summarized draft view only shows previews. On a prior turn, call read_section with a range that fully covers {ps}..{pe} (inclusive) before propose_patch. Then patch the same indices.";
                         await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmPreview, llmRequest);
+                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmCallId);
                         break;
                     }
 
@@ -190,7 +185,7 @@ public static class AgenticEditLoop
                     {
                         lastToolResult = "Error: propose_patch requires non-empty replacement.";
                         await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmPreview, llmRequest);
+                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmCallId);
                         break;
                     }
 
@@ -199,7 +194,7 @@ public static class AgenticEditLoop
                         lastToolResult =
                             $"Error: replacement exceeds {MaxReplacementChars} characters.";
                         await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmPreview, llmRequest);
+                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmCallId);
                         break;
                     }
 
@@ -214,7 +209,7 @@ public static class AgenticEditLoop
                         lastToolResult =
                             $"Error: replacement is much shorter than the replaced span (~{originalWords} words vs ~{replacementWords}). You must preserve plot and on-page events—tighten wording without deleting beats, or use finish.";
                         await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"propose_patch rejected — {lastToolResult}", llmPreview, llmRequest);
+                            turnSw.ElapsedMilliseconds, $"propose_patch rejected — {lastToolResult}", llmCallId);
                         break;
                     }
 
@@ -227,7 +222,7 @@ public static class AgenticEditLoop
                         logger.LogWarning(ex, "Agentic edit patch failed");
                         lastToolResult = $"Error applying patch: {ex.Message}";
                         await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmPreview, llmRequest);
+                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmCallId);
                         break;
                     }
 
@@ -236,14 +231,14 @@ public static class AgenticEditLoop
                         $"propose_patch applied: replaced paragraphs {ps}..{pe}. Draft now has {paragraphs.Count} paragraphs.";
                     var patchDetail = BuildProposePatchProgressDetail(ps, pe, action.Reason, originalSpan, replacement);
                     await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                        turnSw.ElapsedMilliseconds, patchDetail, llmPreview, llmRequest);
+                        turnSw.ElapsedMilliseconds, patchDetail, llmCallId);
                     break;
                 }
 
                 default:
                     lastToolResult = $"Error: unknown action \"{action.Action}\". Use read_section, propose_patch, or finish.";
                     await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                        turnSw.ElapsedMilliseconds, lastToolResult, llmPreview, llmRequest);
+                        turnSw.ElapsedMilliseconds, lastToolResult, llmCallId);
                     break;
             }
         }
@@ -406,12 +401,11 @@ public static class AgenticEditLoop
         int maxTurns,
         long turnMs,
         string detailBody,
-        string? llmPreview,
-        string? llmRequest)
+        Guid llmCallId)
     {
         var detail = $"Turn {turn}/{maxTurns}: {detailBody}";
         await notifier.NotifyAsync(runId, "AgentEditTurn", nameof(PipelineStep.AgentEdit),
-            detail, cancellationToken, pipelineElapsedMs(), turnMs, llmPreview, llmRequest);
+            detail, cancellationToken, pipelineElapsedMs(), turnMs, llmCallId);
     }
 
     private static string BuildProposePatchProgressDetail(int ps, int pe, string? reason, string originalSpan, string replacement)
@@ -435,8 +429,6 @@ public static class AgenticEditLoop
         return s[..max] + "…";
     }
 
-    private static string SerializeAgentLlmPrompt(string system, string user) =>
-        JsonSerializer.Serialize(new { system, user }, new JsonSerializerOptions { WriteIndented = true });
 }
 
 internal sealed class AgentEditActionDto

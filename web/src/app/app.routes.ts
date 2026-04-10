@@ -11,8 +11,16 @@ export const routes: Routes = [
     loadComponent: () => import('./book-world/book-world.component').then((m) => m.BookWorldComponent)
   },
   {
+    path: 'scenes/:sceneId/draft',
+    loadComponent: () => import('./scene-draft/scene-draft.component').then((m) => m.SceneDraftComponent)
+  },
+  {
     path: 'scenes',
     loadComponent: () => import('./scene-workflow/scene-workflow.component').then((m) => m.SceneWorkflowComponent)
+  },
+  {
+    path: 'scene-admin',
+    loadComponent: () => import('./scene-admin/scene-admin.component').then((m) => m.SceneAdminComponent)
   },
   {
     path: 'ollama-models',

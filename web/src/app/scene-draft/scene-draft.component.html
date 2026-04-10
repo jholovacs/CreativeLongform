@@ -1,0 +1,280 @@
+<section class="scene-draft">
+  <nav class="crumb">
+    <a routerLink="/" class="crumb-link"><app-ui-icon name="arrow-left" /><span>Stories</span></a>
+    <span class="crumb-sep" aria-hidden="true">·</span>
+    <a routerLink="/scenes" class="crumb-link">Scene Workflow</a>
+    <span class="crumb-sep" aria-hidden="true">·</span>
+    <span class="crumb-current" aria-current="page">Draft</span>
+  </nav>
+
+  <header>
+    <h1>Draft workspace</h1>
+    <p class="subtitle">
+      Edit the generated draft, run optional LLM suggestions and corrections, then finalize to record the end-state for the next
+      scene.
+    </p>
+    @if (bookId) {
+      <p class="meta">
+        {{ bookTitle }} · {{ chapterTitle }} · {{ sceneTitle }} ·
+        <a [routerLink]="['/book', bookId]">Story &amp; World Settings</a>
+      </p>
+    }
+  </header>
+
+  <div class="draft-nav-actions">
+    <button type="button" class="btn-with-icon secondary" (click)="backToSceneDesign()">
+      <app-ui-icon name="arrow-left" />
+      Back to scene design
+    </button>
+  </div>
+
+  @if (error) {
+    <p class="inline-msg">{{ error }}</p>
+  }
+
+  @if (loading) {
+    <p>Loading…</p>
+  } @else if (bookId) {
+    <div class="panel draft-panel">
+      <h2 class="panel-title">Draft text</h2>
+      <p class="hint">
+        Edit freely, use <strong>Suggest improvements</strong> for optional LLM analysis and proposals, run
+        <strong>Correct With LLM</strong> when you want a targeted revision, or finalize to build the end-state table. With text
+        selected, correction applies only to that selection.
+      </p>
+      <label for="draft-body">Draft</label>
+      <div class="draft-stack">
+        @if (!draftReviewFocused && draftSelectionHighlight()) {
+          <div class="draft-mirror-viewport" aria-hidden="true">
+            <div class="draft-mirror-inner" [style.transform]="draftMirrorTransform()">
+              <span class="draft-mirror-chunk">{{ draftBeforeSelection() }}</span
+              ><mark class="draft-mirror-mark">{{ draftSelectedSlice() }}</mark
+              ><span class="draft-mirror-chunk">{{ draftAfterSelection() }}</span>
+            </div>
+          </div>
+        }
+        <textarea
+          #draftBody
+          id="draft-body"
+          class="draft-textarea"
+          rows="18"
+          [(ngModel)]="draftText"
+          [disabled]="busy || correctModalOpen"
+          (focus)="onDraftFocus()"
+          (blur)="onDraftBlur()"
+          (scroll)="onDraftScroll()"
+          (input)="onDraftScroll()"
+          [class.draft-textarea--ghost]="!draftReviewFocused && draftSelectionHighlight()"
+        ></textarea>
+      </div>
+
+      <div class="draft-rec-toolbar">
+        <button
+          type="button"
+          class="btn-with-icon"
+          (click)="loadDraftRecommendations()"
+          [disabled]="busy || correctModalOpen || recommendationsBusy || draftTooLongForAnalysis || !draftText.trim()"
+          [title]="fieldHelp.suggestImprovements"
+        >
+          <app-ui-icon name="sparkles" />
+          @if (recommendationsBusy) {
+            Analyzing…
+          } @else {
+            Suggest improvements (LLM)
+          }
+        </button>
+        @if (recommendationsBusy) {
+          <button type="button" class="btn-with-icon danger" (click)="cancelDraftRecommendations()" title="Cancel request">
+            <app-ui-icon name="x" />
+            <span class="sr-only">Cancel request</span>
+          </button>
+        }
+        @if (draftTooLongForAnalysis) {
+          <span class="draft-rec-limit">Analysis limit: 100,000 characters.</span>
+        }
+      </div>
+      @if (recommendationsError) {
+        <p class="inline-msg draft-rec-err">{{ recommendationsError }}</p>
+      }
+      @if (draftRecommendations.length > 0) {
+        <div class="draft-rec-list" role="region" aria-label="Suggested draft edits">
+          <h3 class="draft-rec-heading">Suggested edits</h3>
+          @for (item of draftRecommendations; track $index) {
+            <div class="draft-rec-card">
+              <div class="draft-rec-meta">
+                <span class="draft-rec-kind">{{ item.kind }}</span>
+                <span class="draft-rec-range">Paragraphs {{ item.paragraphStart }}–{{ item.paragraphEnd }}</span>
+              </div>
+              <p class="draft-rec-problem">{{ item.problem }}</p>
+              @if (getSuggestionDiffPreview(item); as diff) {
+                @switch (diff.mode) {
+                  @case ('replace') {
+                    <div
+                      class="draft-rec-diff"
+                      role="group"
+                      [attr.aria-label]="'Current draft vs text after applying replacement'"
+                    >
+                      <div class="draft-rec-diff-col">
+                        <h4 class="draft-rec-diff-label">Current</h4>
+                        @if (diff.beforeContext) {
+                          <pre class="draft-rec-ctx">{{ diff.beforeContext }}</pre>
+                        }
+                        <pre class="draft-rec-focus draft-rec-focus--problem">{{ diff.problemSpan }}</pre>
+                        @if (diff.afterContext) {
+                          <pre class="draft-rec-ctx">{{ diff.afterContext }}</pre>
+                        }
+                      </div>
+                      <div class="draft-rec-diff-col">
+                        <h4 class="draft-rec-diff-label">After applying</h4>
+                        @if (diff.beforeContext) {
+                          <pre class="draft-rec-ctx">{{ diff.beforeContext }}</pre>
+                        }
+                        <pre class="draft-rec-focus draft-rec-focus--replace">{{ diff.replacementText }}</pre>
+                        @if (diff.afterContext) {
+                          <pre class="draft-rec-ctx">{{ diff.afterContext }}</pre>
+                        }
+                      </div>
+                    </div>
+                  }
+                  @case ('rewrite') {
+                    <div
+                      class="draft-rec-diff draft-rec-diff--rewrite"
+                      role="group"
+                      [attr.aria-label]="'Current draft and proposed rewrite instruction'"
+                    >
+                      <div class="draft-rec-diff-col">
+                        <h4 class="draft-rec-diff-label">Current</h4>
+                        @if (diff.beforeContext) {
+                          <pre class="draft-rec-ctx">{{ diff.beforeContext }}</pre>
+                        }
+                        <pre class="draft-rec-focus draft-rec-focus--problem">{{ diff.problemSpan }}</pre>
+                        @if (diff.afterContext) {
+                          <pre class="draft-rec-ctx">{{ diff.afterContext }}</pre>
+                        }
+                      </div>
+                      <div class="draft-rec-diff-col">
+                        <h4 class="draft-rec-diff-label">Proposed approach</h4>
+                        <p class="draft-rec-proposal">{{ diff.instruction }}</p>
+                        <p class="draft-rec-rewrite-hint">
+                          Use “Use for Correct With LLM” to apply this instruction to the passage above.
+                        </p>
+                      </div>
+                    </div>
+                  }
+                }
+              } @else {
+                @if (item.kind === 'replace' && item.replacementText) {
+                  <pre class="draft-rec-preview">{{ item.replacementText }}</pre>
+                }
+                @if (item.kind === 'rewrite' && item.rewriteInstruction) {
+                  <p class="draft-rec-instruction"><strong>Instruction:</strong> {{ item.rewriteInstruction }}</p>
+                }
+              }
+              <div class="draft-rec-card-actions">
+                <button
+                  type="button"
+                  class="secondary"
+                  (click)="selectRecommendedReplacementInDraft(item)"
+                  [title]="fieldHelp.selectInDraft"
+                >
+                  Select in draft
+                </button>
+                @if (item.kind === 'replace') {
+                  <button type="button" class="primary" (click)="applyRecommendationReplace($index)">Apply replacement</button>
+                }
+                @if (item.kind === 'rewrite') {
+                  <button type="button" (click)="useRewriteInstruction($index)">Use for Correct With LLM</button>
+                }
+                <button type="button" class="draft-rec-dismiss" (click)="dismissRecommendationAt($index)">Dismiss</button>
+              </div>
+            </div>
+          }
+        </div>
+      }
+
+      <div class="review-actions">
+        <label class="correct-row">
+          Correction Instruction
+          <input
+            type="text"
+            [(ngModel)]="correctInstruction"
+            placeholder="e.g. Sharpen the dialogue in the café beat"
+            [disabled]="busy || correctModalOpen"
+            [title]="fieldHelp.correctInstruction"
+          />
+        </label>
+        <button type="button" class="btn-with-icon" (click)="runCorrect()" [disabled]="busy || correctModalOpen || !generationRunId">
+          <app-ui-icon name="sparkles" />
+          Correct With LLM
+        </button>
+        <button
+          type="button"
+          class="primary btn-with-icon"
+          (click)="finalizeDraft()"
+          [disabled]="busy || correctModalOpen || !generationRunId"
+        >
+          <app-ui-icon name="check" />
+          Accept &amp; Finalize (State Table)
+        </button>
+        @if (busy) {
+          <button
+            type="button"
+            class="btn-with-icon danger"
+            (click)="cancelReviewDraftRequest()"
+            title="Cancel in-flight request"
+          >
+            <app-ui-icon name="x" />
+            <span class="sr-only">Cancel request</span>
+          </button>
+        }
+      </div>
+    </div>
+
+    @if (lastStateTableJson) {
+      <details class="panel collapsible end-state-details" [open]="endStateOpen" (toggle)="onEndStateToggle($event)">
+        <summary>
+          <span class="sum-title">End-State Table (JSON)</span>
+          <span class="sum-preview">{{ endStateSummary }}</span>
+        </summary>
+        <div class="collapsible-inner">
+          <p class="hint">
+            After generate, this shows a draft-derived preview (pending). On finalize, the server rebuilds the end-state table
+            from your accepted draft and scene-entry state.
+          </p>
+          <pre class="state-pre">{{ lastStateTableJson }}</pre>
+        </div>
+      </details>
+    }
+  }
+
+  <app-llm-working-indicator [visible]="draftLlmWorkingVisible" [label]="draftLlmWorkingLabel" />
+
+  @if (correctModalOpen) {
+    <div class="correct-modal-root" role="dialog" aria-modal="true" aria-labelledby="correct-modal-title">
+      <div class="correct-modal-backdrop" tabindex="-1"></div>
+      <div class="correct-modal-panel">
+        <h2 id="correct-modal-title" class="correct-modal-title">Review LLM correction</h2>
+        <p class="hint correct-modal-hint">
+          The model has proposed new draft text. Edit it below if needed, then accept to keep it or reject to restore your
+          previous draft and end-state preview.
+        </p>
+        <label for="correct-modal-body" class="correct-modal-label">Proposed draft</label>
+        <textarea
+          id="correct-modal-body"
+          class="correct-modal-textarea"
+          rows="14"
+          [(ngModel)]="correctModalEditedText"
+          [disabled]="correctModalBusy"
+        ></textarea>
+        <div class="correct-modal-actions">
+          <button type="button" class="secondary" (click)="rejectCorrectModal()" [disabled]="correctModalBusy">
+            Reject
+          </button>
+          <button type="button" class="primary" (click)="acceptCorrectModal()" [disabled]="correctModalBusy">
+            Accept
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+</section>

@@ -12,10 +12,14 @@ export interface GenerationProgressPayload {
   elapsedMs?: number | null;
   /** Duration of this operation (e.g. one LLM round-trip or agent turn). */
   stepDurationMs?: number | null;
-  /** Truncated model output for the UI. */
-  llmPreview?: string | null;
-  /** Full request payload sent to the model (e.g. JSON body); expand in UI to inspect. */
-  llmRequest?: string | null;
+  /** When set, load full request/response via `GET /odata/LlmCalls` (filter by id). */
+  llmCallId?: string | null;
+}
+
+/** Response from POST /api/scenes/{id}/generation/correct (camelCase JSON). */
+export interface CorrectDraftResponse {
+  correctedDraftText: string;
+  pendingPostStateJson: string | null;
 }
 
 /** Server defaults for generation UI (GET /api/settings/generation). */
@@ -86,7 +90,7 @@ export class GenerationService {
       selectionEnd?: number | null;
     }
   ) {
-    return this.http.post(`${apiBaseUrl}/api/scenes/${sceneId}/generation/correct`, body);
+    return this.http.post<CorrectDraftResponse>(`${apiBaseUrl}/api/scenes/${sceneId}/generation/correct`, body);
   }
 
   cancelGeneration(sceneId: string, generationRunId: string) {

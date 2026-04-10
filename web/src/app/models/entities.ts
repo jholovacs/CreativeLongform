@@ -207,3 +207,15 @@ export interface LinkCanonApplyResult {
   relationsUpdated: number;
   timelineEntriesUpdated: number;
 }
+
+/** OData `LlmCalls` row — persisted LLM request/response for a pipeline step. */
+export interface LlmCall {
+  id: string;
+  generationRunId?: string | null;
+  bookId?: string | null;
+  step: string;
+  model: string;
+  requestJson: string;
+  responseText: string;
+  createdAt?: string;
+}

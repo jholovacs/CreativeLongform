@@ -2,7 +2,7 @@ import { CommonModule } from '@angular/common';
 import { Component, HostListener, OnDestroy, OnInit, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import { Subject, debounceTime, distinctUntilChanged, finalize, map, takeUntil } from 'rxjs';
+import { Subject, Subscription, debounceTime, distinctUntilChanged, finalize, map, takeUntil } from 'rxjs';
 import {
   ApplyLinkCanonItem,
   Book,
@@ -20,6 +20,7 @@ import {
 import { formatRelationLabel } from '../core/relation-label';
 import { ODataService } from '../services/odata.service';
 import { WorldService } from '../services/world.service';
+import { LlmWorkingIndicatorComponent } from '../shared/llm-working-indicator/llm-working-indicator.component';
 import { UiIconComponent } from '../shared/ui-icon.component';
 import { BOOK_WORLD_FIELD_HELP } from './book-world-field-help';
 import { TimelineVizModalComponent } from './timeline-viz-modal.component';
@@ -48,7 +49,7 @@ interface LinkCanonUiRow {
 @Component({
   selector: 'app-book-world',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, TimelineVizModalComponent, UiIconComponent],
+  imports: [CommonModule, FormsModule, RouterLink, TimelineVizModalComponent, UiIconComponent, LlmWorkingIndicatorComponent],
   templateUrl: './book-world.component.html',
   styleUrl: './book-world.component.scss'
 })
@@ -65,6 +66,10 @@ export class BookWorldComponent implements OnInit, OnDestroy {
   private readonly linksSearch$ = new Subject<string>();
   private readonly unitsSearch$ = new Subject<string>();
   private readonly moneySearch$ = new Subject<string>();
+  /** Unsubscribe to cancel in-flight LLM HTTP (extract, generate, canon review, glossary, suggest-links). */
+  private worldLlmSub: Subscription | undefined;
+  /** True only while extract-from-text or generate-from-prompt LLM calls run. */
+  extractOrGenerateRunning = false;
 
   readonly kinds = [
     'Geography',
@@ -292,8 +297,28 @@ export class BookWorldComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.worldLlmSub?.unsubscribe();
     this.destroy$.next();
     this.destroy$.complete();
+  }
+
+  private beginWorldLlmRequest(): void {
+    this.worldLlmSub?.unsubscribe();
+  }
+
+  cancelWorldLlmRequest(): void {
+    this.worldLlmSub?.unsubscribe();
+    this.worldLlmSub = undefined;
+  }
+
+  /** Bottom banner when LLM runs without a blocking modal (extract/generate + glossary). */
+  get bookWorldLlmBannerVisible(): boolean {
+    return this.extractOrGenerateRunning || this.glossaryBusy;
+  }
+
+  get bookWorldLlmBannerLabel(): string {
+    if (this.glossaryBusy) return 'Generating glossary…';
+    return 'Model is working…';
   }
 
   @HostListener('document:keydown', ['$event'])
@@ -1085,38 +1110,56 @@ export class BookWorldComponent implements OnInit, OnDestroy {
 
   runExtract(): void {
     this.busy = true;
+    this.extractOrGenerateRunning = true;
     this.error = null;
-    this.world.extractFromText(this.bookId, this.extractText).subscribe({
-      next: (res) => {
-        this.busy = false;
-        this.extractText = '';
-        if (res.suggestedLinks?.length) {
-          this.openSuggestedLinksModal(res.suggestedLinks);
+    this.beginWorldLlmRequest();
+    this.worldLlmSub = this.world
+      .extractFromText(this.bookId, this.extractText)
+      .pipe(
+        finalize(() => {
+          this.extractOrGenerateRunning = false;
+        })
+      )
+      .subscribe({
+        next: (res) => {
+          this.busy = false;
+          this.extractText = '';
+          if (res.suggestedLinks?.length) {
+            this.openSuggestedLinksModal(res.suggestedLinks);
+          }
+          this.load();
+        },
+        error: () => {
+          this.busy = false;
         }
-        this.load();
-      },
-      error: () => {
-        this.busy = false;
-      }
-    });
+      });
   }
 
   runGenerate(): void {
     this.busy = true;
+    this.extractOrGenerateRunning = true;
     this.error = null;
-    this.world.generateFromPrompt(this.bookId, this.generatePrompt).subscribe({
-      next: (res) => {
-        this.busy = false;
-        this.generatePrompt = '';
-        if (res.suggestedLinks?.length) {
-          this.openSuggestedLinksModal(res.suggestedLinks);
+    this.beginWorldLlmRequest();
+    this.worldLlmSub = this.world
+      .generateFromPrompt(this.bookId, this.generatePrompt)
+      .pipe(
+        finalize(() => {
+          this.extractOrGenerateRunning = false;
+        })
+      )
+      .subscribe({
+        next: (res) => {
+          this.busy = false;
+          this.generatePrompt = '';
+          if (res.suggestedLinks?.length) {
+            this.openSuggestedLinksModal(res.suggestedLinks);
+          }
+          this.load();
+        },
+        error: () => {
+          this.busy = false;
         }
-        this.load();
-      },
-      error: () => {
-        this.busy = false;
-      }
-    });
+      });
   }
 
   openSuggestedLinksModal(links: WorldBuildingSuggestedLink[]): void {
@@ -1198,7 +1241,8 @@ export class BookWorldComponent implements OnInit, OnDestroy {
     this.linkCanonFocusTitle = el.title;
     this.linkCanonReviewBusy = true;
     this.error = null;
-    this.world
+    this.beginWorldLlmRequest();
+    this.worldLlmSub = this.world
       .reviewLinkCanon(this.bookId, el.id)
       .pipe(finalize(() => (this.linkCanonReviewBusy = false)))
       .subscribe({
@@ -1280,16 +1324,17 @@ export class BookWorldComponent implements OnInit, OnDestroy {
     }
     this.linkCanonApplyBusy = true;
     this.error = null;
-    this.world.applyLinkCanonReview(this.bookId, items).subscribe({
-      next: () => {
-        this.linkCanonApplyBusy = false;
-        this.closeLinkCanonModal();
-        this.load();
-      },
-      error: () => {
-        this.linkCanonApplyBusy = false;
-      }
-    });
+    this.beginWorldLlmRequest();
+    this.worldLlmSub = this.world
+      .applyLinkCanonReview(this.bookId, items)
+      .pipe(finalize(() => (this.linkCanonApplyBusy = false)))
+      .subscribe({
+        next: () => {
+          this.closeLinkCanonModal();
+          this.load();
+        },
+        error: () => {}
+      });
   }
 
   private toLinkCanonUiRow(p: LinkCanonReviewProposal): LinkCanonUiRow {
@@ -1387,7 +1432,8 @@ export class BookWorldComponent implements OnInit, OnDestroy {
           this.editing = null;
           this.load();
           this.llmSuggestWorking = true;
-          this.world
+          this.beginWorldLlmRequest();
+          this.worldLlmSub = this.world
             .suggestLinksForElement(this.bookId, elementId)
             .pipe(finalize(() => (this.llmSuggestWorking = false)))
             .subscribe({
@@ -1395,7 +1441,8 @@ export class BookWorldComponent implements OnInit, OnDestroy {
                 if (suggestions.length) {
                   this.openSuggestedLinksModal(suggestions);
                 }
-              }
+              },
+              error: () => {}
             });
         },
         error: () => {
@@ -1448,7 +1495,8 @@ export class BookWorldComponent implements OnInit, OnDestroy {
           this.addElementModalOpen = false;
           this.load();
           this.llmSuggestWorking = true;
-          this.world
+          this.beginWorldLlmRequest();
+          this.worldLlmSub = this.world
             .suggestLinksForElement(this.bookId, created.id)
             .pipe(finalize(() => (this.llmSuggestWorking = false)))
             .subscribe({
@@ -1456,7 +1504,8 @@ export class BookWorldComponent implements OnInit, OnDestroy {
                 if (suggestions.length) {
                   this.openSuggestedLinksModal(suggestions);
                 }
-              }
+              },
+              error: () => {}
             });
         },
         error: () => {
@@ -1555,24 +1604,25 @@ export class BookWorldComponent implements OnInit, OnDestroy {
   downloadGlossary(): void {
     this.glossaryBusy = true;
     this.error = null;
-    this.world.getGlossaryMarkdown(this.bookId, this.glossaryUseLlm).subscribe({
-      next: (md) => {
-        this.glossaryBusy = false;
-        const base = this.book?.title?.trim()
-          ? BookWorldComponent.sanitizeFileName(this.book.title)
-          : 'glossary';
-        const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${base}-glossary.md`;
-        a.click();
-        URL.revokeObjectURL(url);
-      },
-      error: () => {
-        this.glossaryBusy = false;
-      }
-    });
+    this.beginWorldLlmRequest();
+    this.worldLlmSub = this.world
+      .getGlossaryMarkdown(this.bookId, this.glossaryUseLlm)
+      .pipe(finalize(() => (this.glossaryBusy = false)))
+      .subscribe({
+        next: (md) => {
+          const base = this.book?.title?.trim()
+            ? BookWorldComponent.sanitizeFileName(this.book.title)
+            : 'glossary';
+          const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${base}-glossary.md`;
+          a.click();
+          URL.revokeObjectURL(url);
+        },
+        error: () => {}
+      });
   }
 
   private static sanitizeFileName(s: string): string {

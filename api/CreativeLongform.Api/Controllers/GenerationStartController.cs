@@ -82,16 +82,16 @@ public sealed class GenerationStartController : ControllerBase
     }
 
     [HttpPost("{sceneId:guid}/generation/correct")]
-    public async Task<ActionResult> CorrectDraft(
+    public async Task<ActionResult<CorrectDraftResult>> CorrectDraft(
         Guid sceneId,
         [FromBody] CorrectDraftBody body,
         CancellationToken cancellationToken)
     {
         try
         {
-            await _orchestrator.CorrectDraftAsync(sceneId, body.GenerationRunId, body.Instruction,
+            var result = await _orchestrator.CorrectDraftAsync(sceneId, body.GenerationRunId, body.Instruction,
                 body.CurrentDraftText, body.SelectionStart, body.SelectionEnd, cancellationToken);
-            return NoContent();
+            return Ok(result);
         }
         catch (InvalidOperationException ex)
         {

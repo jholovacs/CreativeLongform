@@ -48,6 +48,11 @@
 
     <div class="submit-row">
       <button type="submit" class="primary" [disabled]="busy">Create story</button>
+      @if (bootstrapInFlight) {
+        <button type="button" class="danger" (click)="cancelBootstrap()">Cancel request</button>
+      }
     </div>
   </form>
+
+  <app-llm-working-indicator [visible]="bootstrapInFlight" label="Generating world entries…" />
 </section>

@@ -20,6 +20,7 @@ public static class ODataEdmModelBuilder
         builder.EntitySet<SceneWorldElement>("SceneWorldElements");
         builder.EntityType<SceneWorldElement>().HasKey(e => new { e.SceneId, e.WorldElementId });
         builder.EntitySet<TimelineEntry>("TimelineEntries");
+        builder.EntitySet<LlmCall>("LlmCalls");
         return builder.GetEdmModel();
     }
 }

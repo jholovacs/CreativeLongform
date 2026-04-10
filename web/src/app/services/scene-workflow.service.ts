@@ -36,6 +36,11 @@ export class SceneWorkflowService {
       narrativePerspective: string | null;
       narrativeTense: string | null;
       beginningStateJson: string | null;
+      latestDraftText: string;
+      pendingPostStateJson: string | null;
+      clearPendingPostState: boolean;
+      generationRunId: string;
+      finalDraftText: string;
     }>
   ) {
     return this.http.patch(`${apiBaseUrl}/api/scenes/${sceneId}`, body);

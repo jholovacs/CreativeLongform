@@ -1,6 +1,7 @@
 using System.Net.Http;
 using CreativeLongform.Application.Abstractions;
 using CreativeLongform.Application.DraftRecommendation;
+using CreativeLongform.Domain.Entities;
 using CreativeLongform.Domain.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -80,6 +81,60 @@ public sealed class SceneWorkflowController : ControllerBase
         if (body.BeginningStateJson is not null)
             scene.BeginningStateJson = string.IsNullOrWhiteSpace(body.BeginningStateJson) ? null : body.BeginningStateJson;
 
+        if (body.LatestDraftText is not null)
+            scene.LatestDraftText = body.LatestDraftText;
+        if (body.ClearPendingPostState == true)
+            scene.PendingPostStateJson = null;
+        else if (body.PendingPostStateJson is not null)
+            scene.PendingPostStateJson = body.PendingPostStateJson;
+        if (body.GenerationRunId is Guid runId && body.FinalDraftText is not null)
+        {
+            var run = await _db.GenerationRuns.FirstOrDefaultAsync(r => r.Id == runId && r.SceneId == sceneId, cancellationToken);
+            if (run is not null)
+                run.FinalDraftText = body.FinalDraftText;
+        }
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("chapters/{chapterId:guid}/scenes")]
+    public async Task<ActionResult<CreatedSceneDto>> CreateScene(Guid chapterId, [FromBody] CreateSceneBody? body,
+        CancellationToken cancellationToken)
+    {
+        var chapter = await _db.Chapters.FirstOrDefaultAsync(c => c.Id == chapterId, cancellationToken);
+        if (chapter is null)
+            return NotFound();
+
+        var maxOrder = await _db.Scenes.Where(s => s.ChapterId == chapterId).Select(s => s.Order)
+            .DefaultIfEmpty()
+            .MaxAsync(cancellationToken);
+
+        var title = string.IsNullOrWhiteSpace(body?.Title) ? "New scene" : body.Title.Trim();
+        var scene = new Scene
+        {
+            Id = Guid.NewGuid(),
+            ChapterId = chapterId,
+            Order = maxOrder + 1,
+            Title = title,
+            Synopsis = "",
+            Instructions = ""
+        };
+        _db.Scenes.Add(scene);
+        await _db.SaveChangesAsync(cancellationToken);
+
+        return CreatedAtAction(nameof(GetWorkflowContext), new { sceneId = scene.Id },
+            new CreatedSceneDto { Id = scene.Id, ChapterId = scene.ChapterId, Order = scene.Order, Title = scene.Title });
+    }
+
+    [HttpDelete("scenes/{sceneId:guid}")]
+    public async Task<ActionResult> DeleteScene(Guid sceneId, CancellationToken cancellationToken)
+    {
+        var scene = await _db.Scenes.FirstOrDefaultAsync(s => s.Id == sceneId, cancellationToken);
+        if (scene is null)
+            return NotFound();
+
+        _db.Scenes.Remove(scene);
         await _db.SaveChangesAsync(cancellationToken);
         return NoContent();
     }
@@ -171,6 +226,19 @@ public sealed class SceneWorkflowController : ControllerBase
         return NoContent();
     }
 
+    public sealed class CreateSceneBody
+    {
+        public string? Title { get; set; }
+    }
+
+    public sealed class CreatedSceneDto
+    {
+        public Guid Id { get; set; }
+        public Guid ChapterId { get; set; }
+        public int Order { get; set; }
+        public string Title { get; set; } = "";
+    }
+
     public sealed class PatchSceneBody
     {
         public string? Title { get; set; }
@@ -180,6 +248,13 @@ public sealed class SceneWorkflowController : ControllerBase
         public string? NarrativePerspective { get; set; }
         public string? NarrativeTense { get; set; }
         public string? BeginningStateJson { get; set; }
+        public string? LatestDraftText { get; set; }
+        public string? PendingPostStateJson { get; set; }
+        /// <summary>When true, clears pending post-state JSON on the scene.</summary>
+        public bool? ClearPendingPostState { get; set; }
+        /// <summary>With <see cref="FinalDraftText"/>, updates that run's stored draft (e.g. after an edit or revert).</summary>
+        public Guid? GenerationRunId { get; set; }
+        public string? FinalDraftText { get; set; }
     }
 
     public sealed class SceneWorkflowContextDto

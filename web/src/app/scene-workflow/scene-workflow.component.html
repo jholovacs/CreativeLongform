@@ -9,8 +9,8 @@
     <h1>Scene Workflow</h1>
     <p class="subtitle">
       Choose where you are in the story, write a synopsis, link world elements, set voice (perspective / tense), then generate a
-      draft with live progress. Optionally ask for suggested improvements (you choose what to apply), then finalize to build the
-      end-state table and mark the chapter complete when ready.
+      draft with live progress. When generation pauses for review, continue in the
+      <strong>Draft workspace</strong> to edit, run LLM tools, and finalize. Mark the chapter complete here when ready.
     </p>
     @if (selectedBookId) {
       <p class="meta">
@@ -102,6 +102,12 @@
     </details>
 
     @if (selectedSceneId) {
+      @if (pendingReviewRunId) {
+        <p class="panel draft-ready-banner">
+          Draft ready for review.
+          <a [routerLink]="['/scenes', selectedSceneId, 'draft']">Open draft workspace</a>
+        </p>
+      }
       @if (sceneManuscript) {
         <details
           class="panel collapsible manuscript-panel"
@@ -296,6 +302,7 @@
           <label for="begin-json">Beginning State JSON</label>
           <textarea
             id="begin-json"
+            class="state-json-textarea"
             rows="6"
             [(ngModel)]="beginningStateJson"
             [disabled]="busy"
@@ -371,6 +378,12 @@
                 Suggest From Synopsis
               }
             </button>
+            @if (suggestBusy) {
+              <button type="button" class="btn-with-icon danger" (click)="cancelSuggestFromSynopsis()" title="Cancel request">
+                <app-ui-icon name="x" />
+                <span class="sr-only">Cancel request</span>
+              </button>
+            }
           </div>
           <div class="pager" role="navigation" aria-label="World elements pages">
             <button
@@ -481,10 +494,11 @@
         </summary>
         <div class="collapsible-inner">
           <p class="hint">
-            Runs the full agentic pipeline (pre-state, draft, agent edits, compliance, quality) then pauses for your review. Set
-            the target word range below for the draft writer pass. When you generate, your current World Elements for This Scene
-            checkboxes are saved first, then the model receives a &quot;Linked world-building&quot; section (titles, summaries,
-            and relationship lines between linked pairs) or an explicit note when none are checked.
+            Runs the full agentic pipeline (pre-state, draft, agent edits, compliance, quality) then opens the
+            <strong>Draft workspace</strong> for editing and finalize. Set the target word range below for the draft writer pass.
+            When you generate, your current World Elements for This Scene checkboxes are saved first, then the model receives a
+            &quot;Linked world-building&quot; section (titles, summaries, and relationship lines between linked pairs) or an
+            explicit note when none are checked.
           </p>
           <div class="quality-thresholds draft-word-range">
             <span class="quality-label">Target draft length (words)</span>
@@ -553,7 +567,7 @@
                 View Log ({{ generationLogEntries.length }})
               </button>
             }
-            @if (busy && generationRunId && !awaitingReview) {
+            @if (busy) {
               <button
                 type="button"
                 class="btn-with-icon danger"
@@ -567,166 +581,6 @@
           </div>
         </div>
       </details>
-
-      @if (awaitingReview && generationRunId) {
-        <details class="panel collapsible review-panel" [open]="panelOpen.review" (toggle)="onPanelToggle('review', $event)">
-          <summary>
-            <span class="sum-title">Review Draft</span>
-            <span class="sum-preview">{{ reviewSummary }}</span>
-            <span class="panel-sum-actions">
-              <button
-                type="button"
-                class="btn-icon"
-                title="Expand section"
-                (click)="expandPanel('review', $event)"
-                [disabled]="panelOpen.review"
-              >
-                <app-ui-icon name="chevron-down" />
-                <span class="sr-only">Expand section</span>
-              </button>
-              <button
-                type="button"
-                class="btn-icon"
-                title="Collapse section"
-                (click)="collapsePanel('review', $event)"
-                [disabled]="!panelOpen.review"
-              >
-                <app-ui-icon name="chevron-up" />
-                <span class="sr-only">Collapse section</span>
-              </button>
-            </span>
-          </summary>
-          <div class="collapsible-inner">
-            <p class="hint">
-              The pipeline generates a draft first (no automatic editor pass). Edit freely, use <strong>Suggest improvements</strong>
-              for optional LLM analysis and proposals, run <strong>Correct With LLM</strong> when you want a targeted revision, or
-              finalize to build the end-state table. With text selected, correction applies only to that selection.
-            </p>
-            <label for="draft-body">Draft Text</label>
-            <textarea
-              #draftBody
-              id="draft-body"
-              class="draft-textarea"
-              rows="18"
-              [(ngModel)]="draftText"
-              [disabled]="busy"
-              (blur)="onDraftBlur()"
-            ></textarea>
-
-            <div class="draft-rec-toolbar">
-              <button
-                type="button"
-                class="btn-with-icon"
-                (click)="loadDraftRecommendations()"
-                [disabled]="busy || recommendationsBusy || draftTooLongForAnalysis || !draftText.trim()"
-                [title]="fieldHelp.suggestImprovements"
-              >
-                <app-ui-icon name="sparkles" />
-                @if (recommendationsBusy) {
-                  Analyzing…
-                } @else {
-                  Suggest improvements (LLM)
-                }
-              </button>
-              @if (draftTooLongForAnalysis) {
-                <span class="draft-rec-limit">Analysis limit: 100,000 characters.</span>
-              }
-            </div>
-            @if (recommendationsError) {
-              <p class="inline-msg draft-rec-err">{{ recommendationsError }}</p>
-            }
-            @if (draftRecommendations.length > 0) {
-              <div class="draft-rec-list" role="region" aria-label="Suggested draft edits">
-                <h4 class="draft-rec-heading">Suggested edits</h4>
-                @for (item of draftRecommendations; track $index) {
-                  <div class="draft-rec-card">
-                    <div class="draft-rec-meta">
-                      <span class="draft-rec-kind">{{ item.kind }}</span>
-                      <span class="draft-rec-range">Paragraphs {{ item.paragraphStart }}–{{ item.paragraphEnd }}</span>
-                    </div>
-                    <p class="draft-rec-problem">{{ item.problem }}</p>
-                    @if (item.kind === 'replace' && item.replacementText) {
-                      <pre class="draft-rec-preview">{{ item.replacementText }}</pre>
-                    }
-                    @if (item.kind === 'rewrite' && item.rewriteInstruction) {
-                      <p class="draft-rec-instruction"><strong>Instruction:</strong> {{ item.rewriteInstruction }}</p>
-                    }
-                    <div class="draft-rec-card-actions">
-                      @if (item.kind === 'replace') {
-                        <button type="button" class="primary" (click)="applyRecommendationReplace($index)">
-                          Apply replacement
-                        </button>
-                      }
-                      @if (item.kind === 'rewrite') {
-                        <button type="button" (click)="useRewriteInstruction($index)">Use for Correct With LLM</button>
-                      }
-                      <button type="button" class="draft-rec-dismiss" (click)="dismissRecommendationAt($index)">Dismiss</button>
-                    </div>
-                  </div>
-                }
-              </div>
-            }
-
-            <div class="review-actions">
-              <label class="correct-row">
-                Correction Instruction
-                <input
-                  type="text"
-                  [(ngModel)]="correctInstruction"
-                  placeholder="e.g. Sharpen the dialogue in the café beat"
-                  [disabled]="busy"
-                  [title]="fieldHelp.correctInstruction"
-                />
-              </label>
-              <button type="button" class="btn-with-icon" (click)="runCorrect()" [disabled]="busy">
-                <app-ui-icon name="sparkles" />
-                Correct With LLM
-              </button>
-              <button type="button" class="primary btn-with-icon" (click)="finalizeDraft()" [disabled]="busy">
-                <app-ui-icon name="check" />
-                Accept &amp; Finalize (State Table)
-              </button>
-            </div>
-          </div>
-        </details>
-      }
-
-      @if (lastStateTableJson) {
-        <details class="panel collapsible" [open]="panelOpen.endState" (toggle)="onPanelToggle('endState', $event)">
-          <summary>
-            <span class="sum-title">End-State Table (JSON)</span>
-            <span class="sum-preview">{{ endStateSummary }}</span>
-            <span class="panel-sum-actions">
-              <button
-                type="button"
-                class="btn-icon"
-                title="Expand section"
-                (click)="expandPanel('endState', $event)"
-                [disabled]="panelOpen.endState"
-              >
-                <app-ui-icon name="chevron-down" />
-                <span class="sr-only">Expand section</span>
-              </button>
-              <button
-                type="button"
-                class="btn-icon"
-                title="Collapse section"
-                (click)="collapsePanel('endState', $event)"
-                [disabled]="!panelOpen.endState"
-              >
-                <app-ui-icon name="chevron-up" />
-                <span class="sr-only">Collapse section</span>
-              </button>
-            </span>
-          </summary>
-          <div class="collapsible-inner">
-            <p class="hint">
-              After generate, this shows the draft-derived table (pending). When you finalize, it becomes the approved end state the next scene can use as beginning state.
-            </p>
-            <pre class="state-pre">{{ lastStateTableJson }}</pre>
-          </div>
-        </details>
-      }
     }
   }
 
@@ -854,8 +708,9 @@
         </button>
       </div>
       <p class="hint">
-        Live updates from the server: pipeline phases, each LLM call (with response preview and timings), agent edits (what
-        changed and why), compliance/quality repairs (requested fixes and revised draft excerpts), and timings.
+        Live updates from the server: pipeline phases, each LLM call (timings in the header; use “Load full LLM request &amp;
+        response” to pull the saved request and output from the database), agent edits, compliance/quality notes, and
+        timings.
       </p>
       <div
         class="gen-log-scroll"
@@ -879,6 +734,21 @@
             <h3 class="gen-log-title-line">{{ entry.title }}</h3>
             @if (entry.detail) {
               <p class="gen-log-detail">{{ entry.detail }}</p>
+            }
+            @if (entry.llmCallId) {
+              <div class="gen-log-prompt-row gen-log-llm-fetch">
+                @if (!entry.llmRequest && !entry.llmPreview && !entry.llmDetailLoading && !entry.llmDetailError) {
+                  <button type="button" class="secondary" (click)="loadLlmCallDetail(entry)">
+                    Load full LLM request &amp; response
+                  </button>
+                }
+                @if (entry.llmDetailLoading) {
+                  <p class="hint">Loading LLM log…</p>
+                }
+                @if (entry.llmDetailError) {
+                  <p class="gen-log-detail">{{ entry.llmDetailError }}</p>
+                }
+              </div>
             }
             @if (entry.llmRequest) {
               <div class="gen-log-prompt-row">
@@ -918,7 +788,7 @@
         }
       </div>
       <div class="modal-actions gen-log-modal-actions">
-        @if (busy && generationRunId && !awaitingReview) {
+        @if (busy && generationRunId) {
           <button type="button" class="danger" (click)="cancelDraftGeneration()" [title]="fieldHelp.cancelGeneration">
             Cancel generation
           </button>
@@ -927,4 +797,6 @@
       </div>
     </div>
   }
+
+  <app-llm-working-indicator [visible]="suggestBusy" label="Suggesting world elements…" />
 </section>

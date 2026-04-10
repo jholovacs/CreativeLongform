@@ -145,3 +145,54 @@ label:has(> input[type='checkbox']) > :not(input[type='checkbox']) {
   white-space: nowrap;
   border: 0;
 }
+
+/* Shared LLM / long-request visuals (also used in book-world busy modals). */
+@keyframes clf-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes clf-shimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+.clf-llm-spinner-ring {
+  display: inline-block;
+  width: 1.25rem;
+  height: 1.25rem;
+  border: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: clf-spin 0.65s linear infinite;
+  flex-shrink: 0;
+}
+
+.clf-llm-shimmer-line {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  width: 100%;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 12%, transparent),
+    color-mix(in srgb, var(--accent) 70%, transparent),
+    color-mix(in srgb, var(--accent) 12%, transparent)
+  );
+  background-size: 220% 100%;
+  animation: clf-shimmer 1.15s ease-in-out infinite;
+}
+
+.clf-llm-modal-inline {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0 0 0.85rem;
+  text-align: center;
+}

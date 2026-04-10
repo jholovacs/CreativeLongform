@@ -9,13 +9,14 @@ import {
   OllamaModelsService,
   OllamaPreferencesResponse
 } from '../services/ollama-models.service';
+import { LlmWorkingIndicatorComponent } from '../shared/llm-working-indicator/llm-working-indicator.component';
 import { UiIconComponent } from '../shared/ui-icon.component';
 import { OLLAMA_MODELS_FIELD_HELP } from './ollama-models-field-help';
 
 @Component({
   selector: 'app-ollama-models',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, UiIconComponent],
+  imports: [CommonModule, FormsModule, RouterLink, UiIconComponent, LlmWorkingIndicatorComponent],
   templateUrl: './ollama-models.component.html',
   styleUrl: './ollama-models.component.scss'
 })

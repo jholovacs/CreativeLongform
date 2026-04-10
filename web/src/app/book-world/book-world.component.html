@@ -682,6 +682,14 @@
     </summary>
     <div class="collapsible-inner">
     <p class="hint">Requires Ollama. Uses the story profile above.</p>
+    @if (extractOrGenerateRunning) {
+      <p class="llm-cancel-row">
+        <button type="button" class="btn-with-icon danger" (click)="cancelWorldLlmRequest()" title="Cancel in-flight LLM request">
+          <app-ui-icon name="x" />
+          Cancel request
+        </button>
+      </p>
+    }
     <label for="extract">Paste Text to Extract Canon From</label>
     <textarea id="extract" rows="5" [(ngModel)]="extractText" [disabled]="busy" [title]="fieldHelp.extractText"></textarea>
     <button type="button" class="btn-with-icon" (click)="runExtract()" [disabled]="busy">
@@ -776,6 +784,17 @@
             Download glossary (.md)
           }
         </button>
+        @if (glossaryBusy || linkCanonReviewBusy || llmSuggestWorking) {
+          <button
+            type="button"
+            class="btn-with-icon danger"
+            (click)="cancelWorldLlmRequest()"
+            title="Cancel in-flight LLM request"
+          >
+            <app-ui-icon name="x" />
+            <span class="sr-only">Cancel request</span>
+          </button>
+        }
       </div>
     </div>
     <div class="pager" role="navigation" aria-label="World elements pages">
@@ -1273,6 +1292,10 @@
   @if (llmSuggestWorking) {
     <div class="modal-backdrop modal-backdrop-busy" aria-hidden="true"></div>
     <div class="modal-panel modal-working" role="dialog" aria-modal="true" aria-labelledby="llm-working-title" (click)="$event.stopPropagation()">
+      <div class="clf-llm-modal-inline">
+        <span class="clf-llm-spinner-ring" aria-hidden="true"></span>
+        <span class="clf-llm-shimmer-line"></span>
+      </div>
       <h2 id="llm-working-title">Finding Link Suggestions</h2>
       <p class="hint">The model is proposing relations between your entries. This may take a moment.</p>
     </div>
@@ -1287,6 +1310,10 @@
       aria-labelledby="link-canon-working-title"
       (click)="$event.stopPropagation()"
     >
+      <div class="clf-llm-modal-inline">
+        <span class="clf-llm-spinner-ring" aria-hidden="true"></span>
+        <span class="clf-llm-shimmer-line"></span>
+      </div>
       <h2 id="link-canon-working-title">Reviewing links and timeline</h2>
       <p class="hint">
         The model is reviewing all world elements, links, and timeline rows for this book. Large books run in multiple passes;
@@ -1413,6 +1440,13 @@
       (click)="$event.stopPropagation()"
     >
       <h2 id="link-canon-title">Canon review: {{ linkCanonFocusTitle }}</h2>
+      @if (linkCanonApplyBusy) {
+        <div class="clf-llm-modal-inline">
+          <span class="clf-llm-spinner-ring" aria-hidden="true"></span>
+          <span class="clf-llm-shimmer-line"></span>
+          <span class="hint">Applying selected changes…</span>
+        </div>
+      }
       <p class="hint">
         Proposed changes across all links and timeline rows for this book (from one or more model passes). Check &quot;Include&quot;
         for each change you want, use Edit to adjust relation labels or targets, then Apply selected.
@@ -1503,6 +1537,17 @@
           <app-ui-icon name="save" />
           Apply selected
         </button>
+        @if (linkCanonApplyBusy) {
+          <button
+            type="button"
+            class="btn-with-icon danger"
+            (click)="cancelWorldLlmRequest()"
+            title="Cancel apply request"
+          >
+            <app-ui-icon name="x" />
+            Cancel request
+          </button>
+        }
         <button type="button" class="btn-with-icon" (click)="closeLinkCanonModal()" [disabled]="linkCanonApplyBusy">
           <app-ui-icon name="x" />
           Cancel
@@ -1516,4 +1561,6 @@
     [entries]="timelineVizEntries"
     (closed)="closeTimelineViz()"
   />
+
+  <app-llm-working-indicator [visible]="bookWorldLlmBannerVisible" [label]="bookWorldLlmBannerLabel" />
 </section>

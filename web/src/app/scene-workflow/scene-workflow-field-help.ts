@@ -9,7 +9,7 @@ export const SCENE_WORKFLOW_FIELD_HELP = {
   sceneSelect: 'The scene you are drafting. Order is the scene index within the chapter.',
   chapterComplete: 'Mark the chapter finished when all its scenes are done and you are satisfied.',
   manuscriptPanel:
-    'Finalized prose for this scene only. It is not replaced when you run Generate again; use Review Draft for the new run.',
+    'Finalized prose for this scene only. It is not replaced when you run Generate again; use the Draft workspace for the new run.',
 
   synopsis:
     'Main beat and purpose of this scene for generation. Example: Mara confronts her brother at the docks about the forged letter.',
@@ -37,7 +37,10 @@ export const SCENE_WORKFLOW_FIELD_HELP = {
   suggestModalClose: 'Close without applying changes.',
 
   suggestImprovements:
-    'Runs a separate LLM pass that lists optional paragraph-level suggestions. Nothing is applied until you click Apply or use an instruction with Correct.',
+    'Runs a separate LLM pass that lists optional paragraph-level suggestions. Each item shows current text (with one paragraph of context before and after when available) and what would change. Nothing is applied until you click Apply or use an instruction with Correct.',
+
+  selectInDraft:
+    'Focus the draft and select the paragraph range this suggestion refers to (same span as Apply replacement).',
 
   cancelGeneration:
     'Stop this draft run after the current LLM step. Use if the model is going in the wrong direction; you can generate again.',

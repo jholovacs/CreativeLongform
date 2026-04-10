@@ -29,7 +29,7 @@ builder.Services.AddHttpClient();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddSignalR(options =>
 {
-    // Progress events carry full agent-edit JSON (up to ~500k chars) plus large request payloads.
+    // Client → server payloads (e.g. future hub methods). Outgoing progress uses truncated previews in SignalRGenerationProgressNotifier.
     options.MaximumReceiveMessageSize = 8 * 1024 * 1024;
 });
 

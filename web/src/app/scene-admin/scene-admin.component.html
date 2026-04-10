@@ -1,0 +1,245 @@
+<div class="scene-admin">
+  <nav class="crumb" aria-label="Breadcrumb">
+    <a routerLink="/" class="crumb-link">Stories</a>
+    <span class="crumb-sep" aria-hidden="true">/</span>
+    <span class="crumb-current">Scene list</span>
+  </nav>
+
+  <header>
+    <h1>Scenes</h1>
+    <p class="subtitle">Search, filter, and edit scenes. Up to {{ pageSize }} per page.</p>
+  </header>
+
+  <div class="toolbar panel">
+    <div class="toolbar-row">
+      <label class="field-inline">
+        <span>Book</span>
+        <select
+          name="bookFilter"
+          [(ngModel)]="bookFilterId"
+          (ngModelChange)="onBookFilterChange()"
+          [disabled]="loading"
+        >
+          <option value="">All books</option>
+          @for (b of books; track b.id) {
+            <option [value]="b.id">{{ b.title }}</option>
+          }
+        </select>
+      </label>
+
+      <label class="field-inline">
+        <span>Sort</span>
+        <select name="sortKey" [(ngModel)]="sortKey" (ngModelChange)="onSortChange()" [disabled]="loading">
+          <option value="story">Story order</option>
+          <option value="titleAsc">Title A–Z</option>
+          <option value="titleDesc">Title Z–A</option>
+        </select>
+      </label>
+
+      <div class="search-row">
+        <input
+          type="search"
+          name="search"
+          [(ngModel)]="searchInput"
+          (keyup.enter)="applySearch()"
+          placeholder="Search title, synopsis, instructions…"
+          [disabled]="loading"
+        />
+        <button type="button" class="btn-icon" title="Search" (click)="applySearch()" [disabled]="loading">
+          <app-ui-icon name="search" />
+          <span class="sr-only">Search</span>
+        </button>
+      </div>
+
+      <button type="button" class="btn-icon btn-accent" title="Add scene" (click)="openCreate()" [disabled]="loading">
+        <app-ui-icon name="plus" />
+        <span class="sr-only">Add scene</span>
+      </button>
+    </div>
+  </div>
+
+  @if (errorMsg) {
+    <p class="inline-msg" role="alert">{{ errorMsg }}</p>
+  }
+
+  <div class="pager" role="navigation" aria-label="Scene pages">
+    <button
+      type="button"
+      class="btn-icon"
+      title="First page"
+      (click)="onFirstPage()"
+      [disabled]="onFirstPageDisabled()"
+    >
+      <app-ui-icon name="chevrons-left" />
+      <span class="sr-only">First page</span>
+    </button>
+    <button
+      type="button"
+      class="btn-icon"
+      title="Previous page"
+      (click)="onPrevPage()"
+      [disabled]="onPrevPageDisabled()"
+    >
+      <app-ui-icon name="chevron-left" />
+      <span class="sr-only">Previous page</span>
+    </button>
+    <span class="pager-info">{{ rangeLabel() }} · {{ pageSize }} per page</span>
+    <button
+      type="button"
+      class="btn-icon"
+      title="Next page"
+      (click)="onNextPage()"
+      [disabled]="onNextPageDisabled()"
+    >
+      <app-ui-icon name="chevron-right" />
+      <span class="sr-only">Next page</span>
+    </button>
+    <button
+      type="button"
+      class="btn-icon"
+      title="Last page"
+      (click)="onLastPage()"
+      [disabled]="onLastPageDisabled()"
+    >
+      <app-ui-icon name="chevrons-right" />
+      <span class="sr-only">Last page</span>
+    </button>
+  </div>
+
+  <div class="table-wrap panel">
+    @if (loading && rows.length === 0) {
+      <p class="muted">Loading…</p>
+    } @else if (rows.length === 0) {
+      <p class="muted">No scenes match.</p>
+    } @else {
+      <table class="scene-table">
+        <thead>
+          <tr>
+            <th>Book</th>
+            <th>Chapter</th>
+            <th>Ch.#</th>
+            <th>Sc.#</th>
+            <th>Title</th>
+            <th>Synopsis</th>
+            <th class="col-actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of rows; track row.id) {
+            <tr>
+              <td>{{ bookTitle(row) }}</td>
+              <td>{{ chapterTitle(row) }}</td>
+              <td>{{ row.chapter?.order ?? '—' }}</td>
+              <td>{{ row.order }}</td>
+              <td class="cell-title">{{ row.title }}</td>
+              <td class="cell-synopsis">{{ synopsisPreview(row) }}</td>
+              <td class="actions">
+                <button type="button" class="btn-icon" title="Edit" (click)="openEdit(row)">
+                  <app-ui-icon name="pencil" />
+                  <span class="sr-only">Edit</span>
+                </button>
+                <button type="button" class="btn-icon danger" title="Delete" (click)="deleteRow(row)">
+                  <app-ui-icon name="trash" />
+                  <span class="sr-only">Delete</span>
+                </button>
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  </div>
+
+  @if (modalOpen) {
+    <div class="modal-backdrop" (click)="closeModal()" aria-hidden="true"></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" [attr.aria-labelledby]="modalMode === 'create' ? 'modal-create-title' : 'modal-edit-title'" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        @if (modalMode === 'create') {
+          <h2 id="modal-create-title">New scene</h2>
+        } @else {
+          <h2 id="modal-edit-title">Edit scene</h2>
+        }
+        <button type="button" class="btn-icon modal-close-btn" (click)="closeModal()" [disabled]="modalSaving" title="Close">
+          <app-ui-icon name="x" />
+          <span class="sr-only">Close</span>
+        </button>
+      </div>
+
+      @if (modalMode === 'create') {
+        <div class="modal-scroll">
+          <label>
+            Book
+            <select name="createBook" [(ngModel)]="createBookId" (ngModelChange)="onCreateBookChange()" [disabled]="modalSaving">
+              @for (b of books; track b.id) {
+                <option [value]="b.id">{{ b.title }}</option>
+              }
+            </select>
+          </label>
+          <label>
+            Chapter
+            <select name="createChapter" [(ngModel)]="createChapterId" [disabled]="modalSaving || chaptersForCreate().length === 0">
+              @for (c of chaptersForCreate(); track c.id) {
+                <option [value]="c.id">{{ c.title }} ({{ c.order }})</option>
+              }
+            </select>
+          </label>
+          <label>
+            Title (optional)
+            <input type="text" name="createTitle" [(ngModel)]="formTitle" [disabled]="modalSaving" placeholder="New scene" />
+          </label>
+        </div>
+      } @else {
+        <div class="modal-scroll">
+          <label>
+            Title
+            <input type="text" name="editTitle" [(ngModel)]="formTitle" [disabled]="modalSaving" />
+          </label>
+          <label>
+            Synopsis
+            <textarea name="editSynopsis" rows="3" [(ngModel)]="formSynopsis" [disabled]="modalSaving"></textarea>
+          </label>
+          <label>
+            Instructions
+            <textarea name="editInstructions" rows="3" [(ngModel)]="formInstructions" [disabled]="modalSaving"></textarea>
+          </label>
+          <div class="modal-two">
+            <label>
+              Narrative perspective
+              <input type="text" name="editNp" [(ngModel)]="formNarrativePerspective" [disabled]="modalSaving" />
+            </label>
+            <label>
+              Narrative tense
+              <input type="text" name="editNt" [(ngModel)]="formNarrativeTense" [disabled]="modalSaving" />
+            </label>
+          </div>
+          <label>
+            Expected end state notes
+            <textarea name="editEesn" rows="2" [(ngModel)]="formExpectedEndStateNotes" [disabled]="modalSaving"></textarea>
+          </label>
+          <label>
+            Beginning state JSON
+            <textarea name="editBsj" rows="4" [(ngModel)]="formBeginningStateJson" [disabled]="modalSaving" class="mono"></textarea>
+          </label>
+        </div>
+      }
+
+      @if (modalError) {
+        <p class="inline-msg" role="alert">{{ modalError }}</p>
+      }
+
+      <div class="modal-actions">
+        <button type="button" (click)="closeModal()" [disabled]="modalSaving">Cancel</button>
+        <button type="button" class="primary" (click)="saveModal()" [disabled]="modalSaving">
+          @if (modalSaving) {
+            Saving…
+          } @else {
+            <span class="btn-with-icon">
+              <app-ui-icon name="save" />
+              Save
+            </span>
+          }
+        </button>
+      </div>
+    </div>
+  }
+</div>
