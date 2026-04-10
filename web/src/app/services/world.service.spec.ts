@@ -3,6 +3,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { TestBed } from '@angular/core/testing';
 import { WorldService } from './world.service';
 
+/** World elements OData and scene–element link REST helpers. */
 describe('WorldService', () => {
   let service: WorldService;
   let httpMock: HttpTestingController;
@@ -17,6 +18,12 @@ describe('WorldService', () => {
 
   afterEach(() => httpMock.verify());
 
+  /**
+   * System under test: {@link WorldService.getWorldElements}
+   * Test case: Request elements for a book id.
+   * Expected result: OData filter contains book id; large `$top` for picker lists.
+   * Why it's important: Wrong filter leaks other books’ elements into the scene linker.
+   */
   it('getWorldElements filters by book id', () => {
     const bookId = '550e8400-e29b-41d4-a716-446655440000';
     service.getWorldElements(bookId).subscribe();
@@ -26,6 +33,12 @@ describe('WorldService', () => {
     req.flush({ value: [] });
   });
 
+  /**
+   * System under test: {@link WorldService.putSceneWorldElements}
+   * Test case: PUT replacement set of world element ids for a scene.
+   * Expected result: JSON body `{ worldElementIds }` matches API.
+   * Why it's important: Scene-scoped world links drive LLM context; wrong body shape fails silently or 400s.
+   */
   it('putSceneWorldElements sends world element ids', () => {
     const sceneId = '660e8400-e29b-41d4-a716-446655440001';
     service.putSceneWorldElements(sceneId, ['a', 'b']).subscribe();

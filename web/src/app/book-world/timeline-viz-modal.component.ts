@@ -12,10 +12,15 @@ import {
 } from '@angular/core';
 import { TimelineEntry, TimelineEntryKindValue } from '../models/entities';
 
+/** Precomputed item for the horizontal timeline visualization (position + stacking). */
 export interface TimelineVizMarker {
+  /** Source row (scene or world event). */
   entry: TimelineEntry;
+  /** Horizontal position 0–100 within the viewport. */
   xPercent: number;
+  /** Vertical lane index when overlapping markers. */
   stack: number;
+  /** Display title (may differ from raw entry for truncation). */
   title: string;
   kind: TimelineEntryKindValue;
 }

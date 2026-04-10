@@ -4,6 +4,7 @@ import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap } from '@angular/router';
 import { SceneDraftComponent } from './scene-draft.component';
 
+/** Draft workspace: loads nested book/scene data and resolves awaiting-review generation run. */
 describe('SceneDraftComponent', () => {
   const sceneId = '550e8400-e29b-41d4-a716-446655440000';
 
@@ -23,6 +24,12 @@ describe('SceneDraftComponent', () => {
     }).compileComponents();
   });
 
+  /**
+   * System under test: {@link SceneDraftComponent} initial load.
+   * Test case: Flush Books expand tree then GenerationRuns with enum status filter.
+   * Expected result: `generationRunId` set from run row; `draftText` from scene; loading cleared.
+   * Why it's important: Mismatch with OData filter syntax or wrong field breaks review mode and shows stale drafts.
+   */
   it('loads books then GenerationRuns filter for awaiting review', () => {
     const fixture = TestBed.createComponent(SceneDraftComponent);
     const httpMock = TestBed.inject(HttpTestingController);

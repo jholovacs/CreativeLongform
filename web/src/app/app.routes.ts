@@ -7,6 +7,11 @@ export const routes: Routes = [
     loadComponent: () => import('./new-story/new-story.component').then((m) => m.NewStoryComponent)
   },
   {
+    path: 'book/:bookId/manuscript',
+    loadComponent: () =>
+      import('./manuscript/manuscript-workspace.component').then((m) => m.ManuscriptWorkspaceComponent)
+  },
+  {
     path: 'book/:bookId',
     loadComponent: () => import('./book-world/book-world.component').then((m) => m.BookWorldComponent)
   },

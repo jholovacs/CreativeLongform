@@ -8,8 +8,11 @@ namespace CreativeLongform.Domain.Entities;
 /// </summary>
 public class TimelineEntry
 {
+    /// <summary>Primary key.</summary>
     public Guid Id { get; set; }
+    /// <summary>FK to owning book.</summary>
     public Guid BookId { get; set; }
+    /// <summary>Navigation to book.</summary>
     public Book Book { get; set; } = null!;
     public TimelineEntryKind Kind { get; set; }
 

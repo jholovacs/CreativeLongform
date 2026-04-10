@@ -1,0 +1,92 @@
+<section class="manuscript-workspace">
+  <nav class="crumb">
+    <a routerLink="/" class="crumb-link"><app-ui-icon name="arrow-left" /><span>Stories</span></a>
+    <span class="crumb-sep" aria-hidden="true">·</span>
+    @if (bookId) {
+      <a [routerLink]="['/book', bookId]" class="crumb-link">Story &amp; World</a>
+      <span class="crumb-sep" aria-hidden="true">·</span>
+    }
+    <span class="crumb-current" aria-current="page">Manuscript</span>
+  </nav>
+
+  <header>
+    <h1>Manuscript</h1>
+    <p class="subtitle">
+      Assemble finalized scene prose into a chapter or full-book document, edit in place, and save a published snapshot. Scene text
+      comes from each scene’s manuscript (after you finalize in the draft workspace).
+    </p>
+    @if (book) {
+      <p class="meta">{{ book.title }}</p>
+    }
+  </header>
+
+  @if (error) {
+    <p class="inline-msg">{{ error }}</p>
+  }
+
+  @if (loading) {
+    <p>Loading…</p>
+  } @else if (book) {
+    <div class="panel controls-panel">
+      <div class="scope-row">
+        <span class="scope-label">Scope</span>
+        <div class="scope-toggle" role="group" aria-label="Manuscript scope">
+          <button
+            type="button"
+            [class.active]="scope === 'book'"
+            (click)="scope = 'book'; onScopeChange()"
+            [disabled]="busy"
+          >
+            Full book
+          </button>
+          <button
+            type="button"
+            [class.active]="scope === 'chapter'"
+            (click)="scope = 'chapter'; onScopeChange()"
+            [disabled]="busy"
+          >
+            Chapter
+          </button>
+        </div>
+        @if (scope === 'chapter' && chapters.length > 0) {
+          <label class="chapter-pick">
+            Chapter
+            <select [(ngModel)]="chapterId" (ngModelChange)="onChapterChange()" [disabled]="busy">
+              @for (ch of chapters; track ch.id) {
+                <option [ngValue]="ch.id">{{ ch.order }}. {{ ch.title }}</option>
+              }
+            </select>
+          </label>
+        }
+      </div>
+      <p class="hint status-hint">{{ statusHint }}</p>
+      <div class="toolbar">
+        <button type="button" class="btn-with-icon primary" (click)="assembleFromScenes()" [disabled]="busy">
+          <app-ui-icon name="sparkles" />
+          Assemble from scenes
+        </button>
+        <button type="button" (click)="useComputed()" [disabled]="busy || !computedAssembledText">
+          Replace editor with computed
+        </button>
+        <button type="button" class="primary" (click)="save()" [disabled]="busy">Save snapshot</button>
+        <button type="button" class="danger-outline" (click)="clearPublished()" [disabled]="busy || !hasStoredSnapshot">
+          Clear snapshot
+        </button>
+      </div>
+    </div>
+
+    <div class="panel editor-panel">
+      <label for="ms-body" class="editor-label">Text</label>
+      <textarea
+        id="ms-body"
+        class="manuscript-body"
+        rows="28"
+        [(ngModel)]="draftText"
+        [disabled]="busy"
+        spellcheck="true"
+      ></textarea>
+    </div>
+  }
+
+  <app-llm-working-indicator [visible]="busy" label="Working…" />
+</section>

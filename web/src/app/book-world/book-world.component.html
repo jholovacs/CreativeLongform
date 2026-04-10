@@ -6,7 +6,10 @@
   </nav>
   <h1>Story &amp; World</h1>
   @if (book) {
-    <p class="meta">Book: {{ book.title }}</p>
+    <p class="meta">
+      Book: {{ book.title }} ·
+      <a [routerLink]="['/book', book.id, 'manuscript']">Manuscript</a>
+    </p>
   }
 
   @if (error) {

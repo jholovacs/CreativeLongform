@@ -4,6 +4,7 @@ import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { SceneWorkflowComponent } from './scene-workflow.component';
 
+/** Scene workflow picker: loads generation settings and book list for starting runs. */
 describe('SceneWorkflowComponent', () => {
   let httpMock: HttpTestingController;
 
@@ -18,6 +19,12 @@ describe('SceneWorkflowComponent', () => {
 
   afterEach(() => httpMock.verify());
 
+  /**
+   * System under test: {@link SceneWorkflowComponent} bootstrap.
+   * Test case: First detection triggers generation settings then OData Books.
+   * Expected result: After flushes, `books` is an empty array and component is truthy.
+   * Why it's important: Ordering and URLs must stay aligned so quality thresholds and book dropdown populate.
+   */
   it('should create and load books', () => {
     const fixture = TestBed.createComponent(SceneWorkflowComponent);
     fixture.detectChanges();

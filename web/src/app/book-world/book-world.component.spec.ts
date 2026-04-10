@@ -5,6 +5,9 @@ import { ActivatedRoute, convertToParamMap } from '@angular/router';
 import { of } from 'rxjs';
 import { BookWorldComponent } from './book-world.component';
 
+/**
+ * Book/world admin screen: ensures initial data loads (book, elements, timeline, links) match API contracts.
+ */
 describe('BookWorldComponent', () => {
   let httpMock: HttpTestingController;
   const bookId = '550e8400-e29b-41d4-a716-446655440000';
@@ -33,6 +36,12 @@ describe('BookWorldComponent', () => {
 
   afterEach(() => httpMock.verify());
 
+  /**
+   * System under test: {@link BookWorldComponent} `ngOnInit` / first change detection.
+   * Test case: Route provides `bookId`; flush OData and REST responses in expected order.
+   * Expected result: Component holds `bookId`; all outbound URLs and query params match (Books filter, WorldElements picker + paged, TimelineEntries, world links REST).
+   * Why it's important: Wrong URLs or missing calls break the world-building page silently; this locks the integration contract.
+   */
   it('should create and load book, world elements, and links', () => {
     const fixture = TestBed.createComponent(BookWorldComponent);
     fixture.detectChanges();

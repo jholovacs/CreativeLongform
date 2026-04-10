@@ -4,8 +4,17 @@ using CreativeLongform.Domain.Enums;
 
 namespace CreativeLongform.Application.Tests;
 
+/// <summary>
+/// Unit tests for <see cref="MeasurementPromptFormatter"/>, which turns <see cref="Book"/> measurement settings into prompt text for the LLM.
+/// </summary>
 public class MeasurementPromptFormatterTests
 {
+    /// <summary>
+    /// <para><b>System under test:</b> <see cref="MeasurementPromptFormatter.Format"/> with <see cref="MeasurementPreset.EarthMetric"/>.</para>
+    /// <para><b>Test case:</b> Book has only preset (no custom JSON).</para>
+    /// <para><b>Expected result:</b> Output mentions metric units and meters (baseline for lengths).</para>
+    /// <para><b>Why it matters:</b> Wrong preset text would confuse the model about real-world vs fictional units.</para>
+    /// </summary>
     [Fact]
     public void Format_includes_preset_baseline_for_metric()
     {
@@ -15,6 +24,12 @@ public class MeasurementPromptFormatterTests
         Assert.Contains("meter", text, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// <para><b>System under test:</b> <see cref="MeasurementPromptFormatter.Format"/> with <see cref="MeasurementPreset.Custom"/> and <see cref="Book.MeasurementSystemJson"/>.</para>
+    /// <para><b>Test case:</b> Valid JSON defining calendar, custom length unit, and currency.</para>
+    /// <para><b>Expected result:</b> Key numbers and names appear in the formatted prompt.</para>
+    /// <para><b>Why it matters:</b> Custom worlds rely on this blob; omissions mean the model ignores user-defined calendars and money.</para>
+    /// </summary>
     [Fact]
     public void Format_appends_custom_json_calendar_and_units()
     {
@@ -33,6 +48,12 @@ public class MeasurementPromptFormatterTests
         Assert.Contains("test", text, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// <para><b>System under test:</b> <see cref="MeasurementPromptFormatter.Format"/> error handling for bad JSON.</para>
+    /// <para><b>Test case:</b> <see cref="MeasurementPreset.EarthUsCustomary"/> with non-JSON <see cref="Book.MeasurementSystemJson"/>.</para>
+    /// <para><b>Expected result:</b> Parse warning appears; preset baseline (US customary) still included.</para>
+    /// <para><b>Why it matters:</b> Invalid custom JSON should not blank the entire measurement section or crash prompt building.</para>
+    /// </summary>
     [Fact]
     public void Format_invalid_json_adds_parse_note_but_keeps_preset()
     {

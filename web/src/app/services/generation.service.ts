@@ -5,8 +5,11 @@ import { apiBaseUrl } from '../core/api-config';
 
 /** Payload from SignalR generation hub (camelCase from server). */
 export interface GenerationProgressPayload {
+  /** Generation run id (same as OData `GenerationRuns`). */
   runId: string;
+  /** Pipeline step name or phase label. */
   step: string | null;
+  /** Human-readable detail for the log UI. */
   detail: string | null;
   /** Milliseconds since the pipeline run started (server wall clock). */
   elapsedMs?: number | null;
@@ -18,13 +21,17 @@ export interface GenerationProgressPayload {
 
 /** Response from POST /api/scenes/{id}/generation/correct (camelCase JSON). */
 export interface CorrectDraftResponse {
+  /** Full draft after correction pass. */
   correctedDraftText: string;
+  /** Updated post-scene state if the model returned one. */
   pendingPostStateJson: string | null;
 }
 
 /** Server defaults for generation UI (GET /api/settings/generation). */
 export interface GenerationDefaultsDto {
+  /** At or above: automated quality repair skipped. */
   qualityAcceptMinScore: number;
+  /** Minimum score to pass; between this and accept: pass with annotations only. */
   qualityReviewOnlyMinScore: number;
 }
 

@@ -16,6 +16,13 @@ public sealed class ODataGenerationRunsTests : IClassFixture<CreativeLongformApi
         _factory = factory;
     }
 
+    /// <summary>
+    /// <para><b>System under test:</b> <c>GET /odata/GenerationRuns</c> with filter on <c>sceneId</c> and enum <c>status</c>.</para>
+    /// <para><b>Test case:</b> Load any scene id from <c>/odata/Scenes</c>, then query runs with
+    /// <c>sceneId eq {guid} and status eq CreativeLongform.Domain.Enums.GenerationRunStatus'AwaitingUserReview'</c> plus orderby/select.</para>
+    /// <para><b>Expected result:</b> HTTP 200 and a JSON <c>value</c> array (possibly empty).</para>
+    /// <para><b>Why it matters:</b> The draft workspace must resolve the awaiting-review run without 400s from bad enum literal or Guid quoting; breaks block review workflow.</para>
+    /// </summary>
     [Fact]
     public async Task Get_odata_generationRuns_filter_sceneId_and_awaiting_review_enum_succeeds()
     {

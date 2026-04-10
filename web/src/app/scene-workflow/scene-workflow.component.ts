@@ -24,14 +24,21 @@ type SceneWorkflowPanelKey =
   | 'worldElements'
   | 'generate';
 
+/** Log line category for the in-app generation activity log. */
 export type GenerationLogKind = 'phase' | 'llm' | 'agent' | 'repair' | 'run' | 'other';
 
+/** One row in the scene workflow generation log (derived from SignalR + optional OData fetches). */
 export interface GenerationLogEntry {
+  /** Stable client id for trackBy. */
   id: string;
+  /** When the event was received. */
   at: Date;
   kind: GenerationLogKind;
+  /** Raw SignalR event name (server). */
   eventName: string;
+  /** Short heading for the row. */
   title: string;
+  /** Body text or summary. */
   detail: string;
   elapsedMs?: number | null;
   stepDurationMs?: number | null;

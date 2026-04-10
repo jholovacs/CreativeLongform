@@ -95,6 +95,7 @@ public sealed class CreativeLongformDbContext : DbContext, ICreativeLongformDbCo
             e.Property(x => x.ContentStyleNotes).HasMaxLength(4000);
             e.Property(x => x.Synopsis).HasMaxLength(16000);
             e.Property(x => x.MeasurementSystemJson).HasColumnType("jsonb");
+            e.Property(x => x.ManuscriptText).HasColumnType("text");
             e.HasIndex(x => x.Title);
         });
 
@@ -103,6 +104,7 @@ public sealed class CreativeLongformDbContext : DbContext, ICreativeLongformDbCo
             e.HasKey(x => x.Id);
             e.Property(x => x.Title).HasMaxLength(512);
             e.Property(x => x.IsComplete).HasDefaultValue(false);
+            e.Property(x => x.ManuscriptText).HasColumnType("text");
             e.HasOne(x => x.Book).WithMany(x => x.Chapters).HasForeignKey(x => x.BookId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(x => new { x.BookId, x.Order }).IsUnique();
         });

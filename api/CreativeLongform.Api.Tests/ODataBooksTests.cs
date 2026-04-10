@@ -3,6 +3,9 @@ using System.Text.Json;
 
 namespace CreativeLongform.Api.Tests;
 
+/// <summary>
+/// Integration tests for OData read endpoints used by the Angular app (<c>Books</c>, <c>WorldElements</c> filters).
+/// </summary>
 public sealed class ODataBooksTests : IClassFixture<CreativeLongformApiFixture>
 {
     private readonly CreativeLongformApiFixture _factory;
@@ -12,6 +15,12 @@ public sealed class ODataBooksTests : IClassFixture<CreativeLongformApiFixture>
         _factory = factory;
     }
 
+    /// <summary>
+    /// <para><b>System under test:</b> <c>GET /odata/Books</c> with development seed data.</para>
+    /// <para><b>Test case:</b> Request first page of books with <c>$top=5</c>.</para>
+    /// <para><b>Expected result:</b> JSON object with a non-empty <c>value</c> array.</para>
+    /// <para><b>Why it matters:</b> The home page and scene workflow depend on OData expand of chapters/scenes; a broken Books endpoint blocks the whole UI.</para>
+    /// </summary>
     [Fact]
     public async Task Get_odata_books_returns_seed_book()
     {
@@ -26,6 +35,12 @@ public sealed class ODataBooksTests : IClassFixture<CreativeLongformApiFixture>
         Assert.True(value.GetArrayLength() > 0);
     }
 
+    /// <summary>
+    /// <para><b>System under test:</b> OData <c>$filter</c> parsing for <c>WorldElements</c> (world-building search UI).</para>
+    /// <para><b>Test case:</b> Complex filter with <c>tolower</c>, <c>contains</c>, and <c>cast(kind,'Edm.String')</c> against an empty book id.</para>
+    /// <para><b>Expected result:</b> HTTP 200 (filter parses and executes; may return zero rows).</para>
+    /// <para><b>Why it matters:</b> Prevents regressions where OData rejects the exact filter string the SPA builds for element search.</para>
+    /// </summary>
     [Fact]
     public async Task Get_odata_world_elements_case_insensitive_kind_filter_parses()
     {

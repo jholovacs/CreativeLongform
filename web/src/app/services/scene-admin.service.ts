@@ -5,16 +5,21 @@ import { apiBaseUrl } from '../core/api-config';
 import { odataCount, odataRows } from '../core/odata-unwrap';
 import { Book, Chapter, ODataCollection, Scene } from '../models/entities';
 
-/** Scene row from OData with expanded chapter and book. */
+/**
+ * Scene row from OData with expanded chapter and book for the scene admin grid
+ * (story order, title search, cross-book navigation).
+ */
 export interface SceneAdminRow extends Scene {
   chapter?: Chapter & { book?: Pick<Book, 'id' | 'title'> };
 }
 
+/** Paged grid result for scene admin. */
 export interface SceneAdminPage {
   items: SceneAdminRow[];
   totalCount: number;
 }
 
+/** Client-side sort for OData `$orderby` construction. */
 export type SceneAdminSortKey = 'story' | 'titleAsc' | 'titleDesc';
 
 @Injectable({ providedIn: 'root' })

@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, Input } from '@angular/core';
 
+/** Allowed icon keys for {@link UiIconComponent} (inline SVG sprite names). */
 export type UiIconName =
   | 'arrow-left'
   | 'chart'
