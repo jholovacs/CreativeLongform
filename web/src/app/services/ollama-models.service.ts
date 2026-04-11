@@ -42,12 +42,21 @@ export interface OllamaInstalledModelDto {
   vramBytes: number | null;
 }
 
+/** Free/total disk for the configured path (API host filesystem). */
+export interface OllamaDiskSpaceDto {
+  pathChecked: string;
+  bytesFree: number;
+  bytesTotal: number;
+}
+
 /** GET /api/ollama/preferences — assignments plus installed Ollama tags and list errors. */
 export interface OllamaPreferencesResponse {
   assignments: OllamaModelAssignmentsDto;
   installedModels: OllamaInstalledModelDto[];
   /** Non-null when listing local models failed (still may show saved assignments). */
   ollamaListError: string | null;
+  /** Present when <code>Ollama:DiskSpaceCheckPath</code> or <code>ImportStagingDirectory</code> is set and readable. */
+  diskSpace?: OllamaDiskSpaceDto | null;
 }
 
 /** Partial PUT body: set a role or clear it back to default. */

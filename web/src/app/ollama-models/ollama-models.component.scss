@@ -235,6 +235,26 @@
     font-weight: 500;
   }
 
+  .disk-space-line {
+    margin: 0 0 0.75rem;
+    padding: 0.55rem 0.75rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface) 90%, var(--accent) 10%);
+    font-size: 0.95rem;
+    line-height: 1.45;
+  }
+
+  .disk-space-path {
+    color: var(--muted);
+    font-size: 0.88rem;
+  }
+
+  .disk-space-path code {
+    font-size: 0.82rem;
+    word-break: break-all;
+  }
+
   .tag {
     font-family: ui-monospace, monospace;
     font-size: 0.85rem;

@@ -97,81 +97,92 @@
       </button>
     </div>
 
-    @if (prefs.installedModels.length > 0) {
+    @if (prefs.installedModels.length > 0 || prefs.diskSpace) {
       <div class="panel">
         <h2>Installed in Ollama</h2>
-        <p class="hint" title="Hover the tag or letter buttons for what each control does.">
-          Click a tag to set Writer only, or use the letter buttons to assign this tag to a role. Then Save assignments.
-          Use the trash control to delete a model from the server and free disk space (same as
-          <code>ollama rm</code>). Sizes come from Ollama: <strong>disk</strong> is the GGUF footprint;
-          <strong>VRAM</strong> appears when that model is currently loaded in memory.
-        </p>
-        <ul class="tag-list">
-          @for (m of prefs.installedModels; track m.name) {
-            <li>
-              <div class="tag-row">
-                <button
-                  type="button"
-                  class="tag"
-                  (click)="writerInput = m.name"
-                  [disabled]="busy"
-                  [title]="help.tagSetWriter"
-                >
-                  {{ m.name }}
-                </button>
-                <button
-                  type="button"
-                  class="tag-delete"
-                  (click)="confirmDelete(m.name)"
-                  [disabled]="busy"
-                  [title]="help.deleteFromDisk"
-                >
-                  <app-ui-icon name="trash" />
-                  <span class="sr-only">Remove from disk</span>
-                </button>
-                <span class="quick">
-                  <button type="button" (click)="pickInstalled(m.name, 'writer')" [disabled]="busy" [title]="help.tagPickWriter">
-                    W
-                  </button>
-                  <button type="button" (click)="pickInstalled(m.name, 'critic')" [disabled]="busy" [title]="help.tagPickCritic">
-                    C
-                  </button>
-                  <button type="button" (click)="pickInstalled(m.name, 'agent')" [disabled]="busy" [title]="help.tagPickAgent">
-                    A
+        @if (prefs.diskSpace) {
+          <p class="disk-space-line" [attr.title]="help.diskSpaceBanner">
+            <strong>{{ formatBytes(prefs.diskSpace.bytesFree) }}</strong> free of
+            {{ formatBytes(prefs.diskSpace.bytesTotal) }} on the API host
+            <span class="disk-space-path">(<code>{{ prefs.diskSpace.pathChecked }}</code>)</span>
+          </p>
+        }
+        @if (prefs.installedModels.length > 0) {
+          <p class="hint" title="Hover the tag or letter buttons for what each control does.">
+            Click a tag to set Writer only, or use the letter buttons to assign this tag to a role. Then Save assignments.
+            Use the trash control to delete a model from the server and free disk space (same as
+            <code>ollama rm</code>). Sizes come from Ollama: <strong>disk</strong> is the GGUF footprint;
+            <strong>VRAM</strong> appears when that model is currently loaded in memory.
+          </p>
+          <ul class="tag-list">
+            @for (m of prefs.installedModels; track m.name) {
+              <li>
+                <div class="tag-row">
+                  <button
+                    type="button"
+                    class="tag"
+                    (click)="writerInput = m.name"
+                    [disabled]="busy"
+                    [title]="help.tagSetWriter"
+                  >
+                    {{ m.name }}
                   </button>
                   <button
                     type="button"
-                    (click)="pickInstalled(m.name, 'worldBuilding')"
+                    class="tag-delete"
+                    (click)="confirmDelete(m.name)"
                     [disabled]="busy"
-                    [title]="help.tagPickWorldBuilding"
+                    [title]="help.deleteFromDisk"
                   >
-                    WB
+                    <app-ui-icon name="trash" />
+                    <span class="sr-only">Remove from disk</span>
                   </button>
-                  <button type="button" (click)="pickInstalled(m.name, 'preState')" [disabled]="busy" [title]="help.tagPickPreState">
-                    Pr
-                  </button>
-                  <button type="button" (click)="pickInstalled(m.name, 'postState')" [disabled]="busy" [title]="help.tagPickPostState">
-                    Po
-                  </button>
-                </span>
-              </div>
-              <p class="tag-meta">
-                <span [title]="help.installedSizeDisk">{{ formatBytes(m.sizeBytes) }} disk</span>
-                @if (m.parameterSize) {
-                  <span> · {{ m.parameterSize }} params</span>
-                }
-                @if (m.quantizationLevel) {
-                  <span> · {{ m.quantizationLevel }}</span>
-                }
-                @if (m.vramBytes != null) {
-                  <span class="tag-meta-vram" [title]="help.installedSizeVram">
-                    · {{ formatBytes(m.vramBytes) }} VRAM (loaded)
+                  <span class="quick">
+                    <button type="button" (click)="pickInstalled(m.name, 'writer')" [disabled]="busy" [title]="help.tagPickWriter">
+                      W
+                    </button>
+                    <button type="button" (click)="pickInstalled(m.name, 'critic')" [disabled]="busy" [title]="help.tagPickCritic">
+                      C
+                    </button>
+                    <button type="button" (click)="pickInstalled(m.name, 'agent')" [disabled]="busy" [title]="help.tagPickAgent">
+                      A
+                    </button>
+                    <button
+                      type="button"
+                      (click)="pickInstalled(m.name, 'worldBuilding')"
+                      [disabled]="busy"
+                      [title]="help.tagPickWorldBuilding"
+                    >
+                      WB
+                    </button>
+                    <button type="button" (click)="pickInstalled(m.name, 'preState')" [disabled]="busy" [title]="help.tagPickPreState">
+                      Pr
+                    </button>
+                    <button type="button" (click)="pickInstalled(m.name, 'postState')" [disabled]="busy" [title]="help.tagPickPostState">
+                      Po
+                    </button>
                   </span>
-                }
-              </p>
-            </li>
-          }
-        </ul>
+                </div>
+                <p class="tag-meta">
+                  <span [title]="help.installedSizeDisk">{{ formatBytes(m.sizeBytes) }} disk</span>
+                  @if (m.parameterSize) {
+                    <span> · {{ m.parameterSize }} params</span>
+                  }
+                  @if (m.quantizationLevel) {
+                    <span> · {{ m.quantizationLevel }}</span>
+                  }
+                  @if (m.vramBytes != null) {
+                    <span class="tag-meta-vram" [title]="help.installedSizeVram">
+                      · {{ formatBytes(m.vramBytes) }} VRAM (loaded)
+                    </span>
+                  }
+                </p>
+              </li>
+            }
+          </ul>
+        } @else {
+          <p class="hint">No models are listed in Ollama yet (or listing failed). Pull a library tag above to install one.</p>
+        }
       </div>
     }
 

@@ -46,6 +46,8 @@ export const OLLAMA_MODELS_FIELD_HELP = {
   installedSizeDisk: 'Total size of model files on disk (Ollama GET /api/tags size).',
   installedSizeVram:
     'VRAM reported by Ollama for this model while it is loaded (GET /api/ps size_vram). Shown only when the model is in memory.',
+  diskSpaceBanner:
+    'Free/total space on the API host filesystem that contains the configured path (Ollama:DiskSpaceCheckPath, or ImportStagingDirectory when the former is empty). May differ from the Ollama-only volume unless you mount the same path.',
   importButton: 'Download the GGUF from the URL, then ollama create with the given name. Requires ImportStagingDirectory and shared volume in Docker.',
 
   changelogSearch: 'Search across timestamp, role, previous/new model names, and source (case-insensitive).',

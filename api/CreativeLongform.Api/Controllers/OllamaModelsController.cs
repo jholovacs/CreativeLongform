@@ -32,6 +32,7 @@ public sealed class OllamaModelsController : ControllerBase
     public async Task<ActionResult<OllamaPreferencesResponse>> GetPreferences(CancellationToken cancellationToken)
     {
         var assignments = await _prefs.GetAssignmentsAsync(cancellationToken);
+        var diskSpace = TryGetDiskSpace(_options.Value);
         IReadOnlyList<OllamaLocalModelInfo> installed;
         try
         {
@@ -43,7 +44,8 @@ public sealed class OllamaModelsController : ControllerBase
             {
                 Assignments = assignments,
                 InstalledModels = Array.Empty<OllamaInstalledModelDto>(),
-                OllamaListError = ex.Message
+                OllamaListError = ex.Message,
+                DiskSpace = diskSpace
             });
         }
 
@@ -62,8 +64,44 @@ public sealed class OllamaModelsController : ControllerBase
         {
             Assignments = assignments,
             InstalledModels = installedDtos,
-            OllamaListError = null
+            OllamaListError = null,
+            DiskSpace = diskSpace
         });
+    }
+
+    /// <summary>
+    /// Free/total space for the filesystem containing <see cref="OllamaOptions.DiskSpaceCheckPath"/> or
+    /// <see cref="OllamaOptions.ImportStagingDirectory"/>.
+    /// </summary>
+    private static OllamaDiskSpaceDto? TryGetDiskSpace(OllamaOptions o)
+    {
+        var path = !string.IsNullOrWhiteSpace(o.DiskSpaceCheckPath?.Trim())
+            ? o.DiskSpaceCheckPath.Trim()
+            : o.ImportStagingDirectory?.Trim() ?? "";
+        if (string.IsNullOrEmpty(path))
+            return null;
+        try
+        {
+            var full = Path.GetFullPath(path);
+            var dir = new DirectoryInfo(full);
+            while (!dir.Exists && dir.Parent != null)
+                dir = dir.Parent;
+            if (!dir.Exists)
+                return null;
+            var drive = new DriveInfo(dir.FullName);
+            if (!drive.IsReady)
+                return null;
+            return new OllamaDiskSpaceDto
+            {
+                PathChecked = path,
+                BytesFree = drive.AvailableFreeSpace,
+                BytesTotal = drive.TotalSize
+            };
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     [HttpPut("preferences")]
@@ -209,6 +247,15 @@ public sealed class OllamaModelsController : ControllerBase
         public OllamaModelAssignmentsDto Assignments { get; set; } = null!;
         public IReadOnlyList<OllamaInstalledModelDto> InstalledModels { get; set; } = Array.Empty<OllamaInstalledModelDto>();
         public string? OllamaListError { get; set; }
+        /// <summary>Null when no path is configured or space could not be read.</summary>
+        public OllamaDiskSpaceDto? DiskSpace { get; set; }
+    }
+
+    public sealed class OllamaDiskSpaceDto
+    {
+        public string PathChecked { get; set; } = "";
+        public long BytesFree { get; set; }
+        public long BytesTotal { get; set; }
     }
 
     public sealed class OllamaInstalledModelDto

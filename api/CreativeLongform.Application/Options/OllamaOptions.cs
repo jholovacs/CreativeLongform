@@ -26,6 +26,12 @@ public sealed class OllamaOptions
     /// </summary>
     public string ImportStagingDirectory { get; set; } = "";
 
+    /// <summary>
+    /// Path on the API host used to report free/total disk space in the Ollama models UI (same filesystem as Ollama models when possible).
+    /// Empty = use <see cref="ImportStagingDirectory"/> when set; if both empty, disk space is not shown.
+    /// </summary>
+    public string DiskSpaceCheckPath { get; set; } = "";
+
     /// <summary>Minimum word count for scene drafts (long-form fiction).</summary>
     public int DraftMinWords { get; set; } = 600;
 
