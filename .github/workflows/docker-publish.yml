@@ -1,0 +1,88 @@
+# Build and push production images to GitHub Container Registry (ghcr.io).
+#
+# Tags:
+#   - Push git tag v* (e.g. v1.2.0) → images tagged v1.2.0 and latest.
+#   - workflow_dispatch → use the "tag" input (also pushes latest).
+#
+# Images (lowercased owner/repo):
+#   ghcr.io/<owner>/<repo>/creativelongform-api
+#   ghcr.io/<owner>/<repo>/creativelongform-web
+#
+# After first push, grant the repo workflow permission to publish packages if needed,
+# and set package visibility in GitHub Packages settings.
+
+name: Publish Docker images
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag (e.g. v1.0.0 or nightly)'
+        required: true
+        default: 'manual'
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Container image names (GHCR requires lowercase)
+        run: |
+          REPO="$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          echo "IMAGE_API=${{ env.REGISTRY }}/${REPO}/creativelongform-api" >> $GITHUB_ENV
+          echo "IMAGE_WEB=${{ env.REGISTRY }}/${REPO}/creativelongform-web" >> $GITHUB_ENV
+
+      - name: Resolve version tag
+        id: ver
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push API
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: api/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_API }}:${{ steps.ver.outputs.VERSION }}
+            ${{ env.IMAGE_API }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Web
+        uses: docker/build-push-action@v6
+        with:
+          context: web
+          file: web/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_WEB }}:${{ steps.ver.outputs.VERSION }}
+            ${{ env.IMAGE_WEB }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

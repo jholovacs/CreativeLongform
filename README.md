@@ -2,6 +2,63 @@
 
 Local-first long-form fiction assistant: **.NET 8** Web API (OData, EF Core, SignalR), **PostgreSQL**, **Ollama**, and an **Angular** client.
 
+---
+
+### New to installing this app?
+
+**[GETTING_STARTED.md](GETTING_STARTED.md)** — step-by-step setup for **non-developers** (Docker Desktop, copy-paste commands, Windows / Mac / Linux). No coding required.
+
+---
+
+## Install from published images (non-dev)
+
+Pre-built **production** API and web images are published to **GitHub Container Registry** (GHCR). They are intended to be **public** so anyone can `docker pull` without logging in. **Maintainers:** for each package under **GitHub → Packages**, open **Package settings** and set **Change package visibility** to **Public** (the default for new packages may be private).
+
+| Image | Package |
+|-------|---------|
+| API | [`ghcr.io/jholovacs/creativelongform/creativelongform-api`](https://github.com/jholovacs/CreativeLongform/pkgs/container/creativelongform-api) |
+| Web (nginx + Angular) | [`ghcr.io/jholovacs/creativelongform/creativelongform-web`](https://github.com/jholovacs/CreativeLongform/pkgs/container/creativelongform-web) |
+
+Tags follow Git releases (e.g. `v1.0.0`) and **`latest`**. Pin a version for reproducible deploys: set `IMAGE_TAG=v1.0.0` when using the compose file below.
+
+### Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) (Docker Desktop, Engine, or Podman with compose compatibility)
+- This repository cloned or at least [`docker-compose.prod.yml`](docker-compose.prod.yml) downloaded
+
+### Steps
+
+1. **Pull and start** the stack (Postgres, Ollama, API, nginx) using the production compose file:
+
+   ```bash
+   docker compose -f docker-compose.prod.yml pull
+   docker compose -f docker-compose.prod.yml up -d
+   ```
+
+2. **Pull an Ollama model** (first run only; models persist in the `ollama` volume):
+
+   ```bash
+   docker compose -f docker-compose.prod.yml exec ollama ollama pull llama3.2
+   ```
+
+   Or set `OLLAMA_MODEL` in a `.env` file next to the compose file (see [docker-compose.prod.yml](docker-compose.prod.yml)) and recreate the API container after changing it.
+
+3. **Open the app** at [http://localhost:8080](http://localhost:8080) (default `WEB_PORT`). The API is on [http://localhost:5094](http://localhost:5094) by default (`API_PORT`).
+
+In **Production**, the API does **not** expose Swagger; use `GET /health` on the API for a quick check. Database migrations run automatically on startup; development-only seed data is **not** applied.
+
+### Configuration and security
+
+- **Postgres:** Override defaults with environment variables or a `.env` file: `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`. If you change the user or database name, update the `postgres` service **healthcheck** in [docker-compose.prod.yml](docker-compose.prod.yml) to match.
+- **Ports:** `WEB_PORT`, `API_PORT`, `OLLAMA_PORT` adjust published ports.
+- **Ollama:** `OLLAMA_MODEL` should match a model you have pulled (`ollama list` inside the `ollama` container).
+
+### Building images yourself
+
+CI publishes images when you push a **`v*`** tag or run the **Publish Docker images** workflow manually (see [.github/workflows/docker-publish.yml](.github/workflows/docker-publish.yml)). To build locally instead, use the main [docker-compose.yml](docker-compose.yml) with `docker compose up -d --build` or `make deploy`.
+
+---
+
 ## Docker Desktop (recommended stack)
 
 Everything can run in Docker: Postgres, Ollama, the API, and **nginx** serving the built Angular app and proxying `/api`, `/odata`, `/hubs`, and `/swagger` to the API.
@@ -111,6 +168,7 @@ Production builds used in Docker use an **empty** API base URL so the browser ca
 - [web](web) — Angular client (OData + SignalR)
 - [web/nginx](web/nginx) — nginx config for the `web` image
 - [api/Dockerfile](api/Dockerfile), [web/Dockerfile](web/Dockerfile) — container builds
+- [docker-compose.prod.yml](docker-compose.prod.yml) — production stack using published GHCR images (no local build)
 
 ## API surface
 
@@ -125,7 +183,7 @@ make test
 # or: dotnet test CreativeLongform.sln   and   cd web && npm run test:ci
 ```
 
-GitHub Actions runs the same on **push to `main`** and on **pull requests** that target `main` (see [.github/workflows/ci.yml](.github/workflows/ci.yml)).
+GitHub Actions runs **.NET and Angular tests** on **push to `main`** and on **pull requests** that target `main` (see [.github/workflows/ci.yml](.github/workflows/ci.yml)). **Docker images** are verified on each PR and published to GHCR on **`v*`** tags or manual workflow runs (see [.github/workflows/docker-verify.yml](.github/workflows/docker-verify.yml) and [.github/workflows/docker-publish.yml](.github/workflows/docker-publish.yml)).
 
 - **Application** (`api/CreativeLongform.Application.Tests`): `LlmJson`, `AgenticEditLoop`, `WorldContextBuilder`, `MeasurementPromptFormatter`.
 - **API** (`api/CreativeLongform.Api.Tests`): OData EDM smoke test; integration tests for `/health` and `/odata/Books` using **Testcontainers** (PostgreSQL) — **Docker must be running**.

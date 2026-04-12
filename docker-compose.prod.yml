@@ -1,0 +1,80 @@
+# Production-style stack using pre-built images from GitHub Container Registry (no local build).
+# Public images: ghcr.io/jholovacs/creativelongform/creativelongform-{api,web}
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Override tags with IMAGE_TAG (default: latest), e.g. IMAGE_TAG=v1.0.0 docker compose -f docker-compose.prod.yml up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: creative-longform-pg
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-creative}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-creative}
+      POSTGRES_DB: ${POSTGRES_DB:-creativelongform}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U creative -d creativelongform"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: creative-longform-ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama:/root/.ollama
+      - ollama_import_staging:/shared/ollama-import
+    restart: unless-stopped
+
+  api:
+    image: ghcr.io/jholovacs/creativelongform/creativelongform-api:${IMAGE_TAG:-latest}
+    container_name: creative-longform-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      DisableHttpsRedirection: "true"
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-creativelongform};Username=${POSTGRES_USER:-creative};Password=${POSTGRES_PASSWORD:-creative}"
+      Ollama__BaseUrl: "http://ollama:11434/api"
+      Ollama__WriterModel: "${OLLAMA_MODEL:-llama3.2}"
+      Ollama__CriticModel: "${OLLAMA_MODEL:-llama3.2}"
+      Ollama__ImportStagingDirectory: "/shared/ollama-import"
+    ports:
+      - "${API_PORT:-5094}:8080"
+    volumes:
+      - ollama_import_staging:/shared/ollama-import
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/8080"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 90s
+    restart: unless-stopped
+
+  web:
+    image: ghcr.io/jholovacs/creativelongform/creativelongform-web:${IMAGE_TAG:-latest}
+    container_name: creative-longform-web
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  ollama:
+  ollama_import_staging:
