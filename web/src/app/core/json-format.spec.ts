@@ -1,4 +1,4 @@
-import { formatJsonPretty } from './json-format';
+import { formatJsonPretty, isEmptyStateJson } from './json-format';
 
 /** Pretty-print helper for state JSON fields in the UI. */
 describe('formatJsonPretty', () => {
@@ -33,5 +33,15 @@ describe('formatJsonPretty', () => {
   it('returns original text when not valid JSON', () => {
     expect(formatJsonPretty('not json')).toBe('not json');
     expect(formatJsonPretty(' { incomplete')).toBe(' { incomplete');
+  });
+
+  it('formats parsed OData jsonb objects', () => {
+    expect(formatJsonPretty({ a: 1 })).toBe('{\n  "a": 1\n}');
+  });
+
+  it('treats empty object as empty state', () => {
+    expect(isEmptyStateJson('{}')).toBe(true);
+    expect(isEmptyStateJson({})).toBe(true);
+    expect(isEmptyStateJson('{"schemaVersion":1}')).toBe(false);
   });
 });

@@ -131,6 +131,16 @@
         ></textarea>
       </div>
 
+      @if (llmThinkingNotes) {
+        <details class="llm-thinking-notes" [open]="false">
+          <summary>Model thinking notes</summary>
+          <p class="hint" [title]="fieldHelp.llmThinkingNotesPanel">
+            Reasoning extracted from model output. Not part of your draft or manuscript.
+          </p>
+          <pre class="llm-thinking-body">{{ llmThinkingNotes }}</pre>
+        </details>
+      }
+
       <div class="draft-rec-toolbar">
         <button
           type="button"
@@ -302,7 +312,7 @@
         <div class="collapsible-inner">
           <p class="hint">
             After generate, this shows a draft-derived preview (pending). On finalize, the server rebuilds the end-state table
-            from your accepted draft and scene-entry state.
+            from your accepted draft; if the model returns empty JSON, the preview from this run or your beginning state is used as a fallback.
           </p>
           <pre class="state-pre">{{ lastStateTableJson }}</pre>
         </div>

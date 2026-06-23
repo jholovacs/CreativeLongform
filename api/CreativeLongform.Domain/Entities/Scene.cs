@@ -26,6 +26,8 @@ public class Scene
     public string? NarrativeTense { get; set; }
     /// <summary>Optional JSON narrative state before this scene (overrides chain from previous scene).</summary>
     public string? BeginningStateJson { get; set; }
+    /// <summary>Author plain-language description of scene-opening state; source for LLM JSON conversion.</summary>
+    public string? BeginningStateProse { get; set; }
     /// <summary>Last approved end-state JSON for this scene (after user accepts generation).</summary>
     public string? ApprovedStateTableJson { get; set; }
     /// <summary>Latest LLM-derived post-scene state from draft review (not yet finalized); cleared when the user finalizes or starts a new run.</summary>
@@ -36,6 +38,8 @@ public class Scene
     public string? LatestDraftText { get; set; }
     /// <summary>Accepted prose after finalize (not overwritten by a new generation run).</summary>
     public string? ManuscriptText { get; set; }
+    /// <summary>Model reasoning extracted from draft/manuscript LLM output (not part of published prose).</summary>
+    public string? LlmThinkingNotes { get; set; }
     /// <summary>Generation attempts for this scene (draft, repair, finalize).</summary>
     public ICollection<GenerationRun> GenerationRuns { get; set; } = new List<GenerationRun>();
     /// <summary>World-building entries linked for prompts (scene-scoped canon).</summary>

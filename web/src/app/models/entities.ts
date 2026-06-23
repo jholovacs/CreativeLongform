@@ -155,6 +155,8 @@ export interface Scene {
   narrativeTense?: string | null;
   /** Serialized state at scene start (continuity). */
   beginningStateJson?: string | null;
+  /** Plain-language author notes for scene-opening state (converted to JSON via LLM). */
+  beginningStateProse?: string | null;
   /** Author-approved state table after finalize. */
   approvedStateTableJson?: string | null;
   /** Latest derived state from draft generation before acceptance. */
@@ -163,6 +165,8 @@ export interface Scene {
   expectedEndStateNotes?: string | null;
   /** Current draft text from the latest generation run. */
   latestDraftText?: string | null;
+  /** Model reasoning blocks stripped from draft/manuscript prose (not part of the story text). */
+  llmThinkingNotes?: string | null;
   /** Accepted prose after finalize; not overwritten by a new run. */
   manuscriptText?: string | null;
 }

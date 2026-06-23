@@ -1,6 +1,8 @@
 using System.Net.Http;
 using CreativeLongform.Application.Abstractions;
 using CreativeLongform.Application.DraftRecommendation;
+using CreativeLongform.Application.Generation;
+using CreativeLongform.Application.Narrative;
 using CreativeLongform.Domain.Entities;
 using CreativeLongform.Domain.Enums;
 using Microsoft.AspNetCore.Mvc;
@@ -15,15 +17,18 @@ public sealed class SceneWorkflowController : ControllerBase
     private readonly ICreativeLongformDbContext _db;
     private readonly IWorldBuildingService _worldBuilding;
     private readonly IDraftRecommendationService _draftRecommendations;
+    private readonly IGenerationOrchestrator _generation;
 
     public SceneWorkflowController(
         ICreativeLongformDbContext db,
         IWorldBuildingService worldBuilding,
-        IDraftRecommendationService draftRecommendations)
+        IDraftRecommendationService draftRecommendations,
+        IGenerationOrchestrator generation)
     {
         _db = db;
         _worldBuilding = worldBuilding;
         _draftRecommendations = draftRecommendations;
+        _generation = generation;
     }
 
     [HttpPost("scenes/{sceneId:guid}/draft/recommendations")]
@@ -59,6 +64,71 @@ public sealed class SceneWorkflowController : ControllerBase
         }
     }
 
+    [HttpPost("scenes/{sceneId:guid}/beginning-state/derive")]
+    public async Task<ActionResult<DeriveBeginningStateResponse>> DeriveBeginningState(
+        Guid sceneId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _generation.DeriveBeginningStateAsync(sceneId, cancellationToken);
+            return Ok(new DeriveBeginningStateResponse
+            {
+                BeginningStateJson = result.BeginningStateJson,
+                DerivedFromPreviousScene = result.DerivedFromPreviousScene
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            if (ex.Message.Contains("Scene not found", StringComparison.Ordinal))
+                return NotFound(ex.Message);
+            return BadRequest(ex.Message);
+        }
+        catch (HttpRequestException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { message = "Language model request failed.", detail = ex.Message });
+        }
+    }
+
+    [HttpPost("scenes/{sceneId:guid}/beginning-state/convert-from-prose")]
+    public async Task<ActionResult<ConvertBeginningStateFromProseResponse>> ConvertBeginningStateFromProse(
+        Guid sceneId,
+        [FromBody] ConvertBeginningStateFromProseBody? body,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var scene = await _db.Scenes.AsNoTracking().FirstOrDefaultAsync(s => s.Id == sceneId, cancellationToken);
+            if (scene is null)
+                return NotFound();
+
+            var prose = body?.Prose?.Trim();
+            if (string.IsNullOrEmpty(prose))
+                prose = scene.BeginningStateProse?.Trim();
+            if (string.IsNullOrEmpty(prose))
+                return BadRequest("Beginning state prose is required.");
+
+            var result = await _generation.ConvertBeginningStateFromProseAsync(sceneId, prose, cancellationToken);
+            return Ok(new ConvertBeginningStateFromProseResponse { BeginningStateJson = result.BeginningStateJson });
+        }
+        catch (InvalidOperationException ex)
+        {
+            if (ex.Message.Contains("Scene not found", StringComparison.Ordinal))
+                return NotFound(ex.Message);
+            return BadRequest(ex.Message);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+        catch (HttpRequestException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { message = "Language model request failed.", detail = ex.Message });
+        }
+    }
+
     [HttpPatch("scenes/{sceneId:guid}")]
     public async Task<ActionResult> PatchScene(Guid sceneId, [FromBody] PatchSceneBody body, CancellationToken cancellationToken)
     {
@@ -66,33 +136,65 @@ public sealed class SceneWorkflowController : ControllerBase
         if (scene is null)
             return NotFound();
 
-        if (body.Title is not null)
-            scene.Title = body.Title;
-        if (body.Synopsis is not null)
-            scene.Synopsis = body.Synopsis;
-        if (body.Instructions is not null)
-            scene.Instructions = body.Instructions;
-        if (body.ExpectedEndStateNotes is not null)
-            scene.ExpectedEndStateNotes = string.IsNullOrWhiteSpace(body.ExpectedEndStateNotes) ? null : body.ExpectedEndStateNotes;
-        if (body.NarrativePerspective is not null)
-            scene.NarrativePerspective = string.IsNullOrWhiteSpace(body.NarrativePerspective) ? null : body.NarrativePerspective;
-        if (body.NarrativeTense is not null)
-            scene.NarrativeTense = string.IsNullOrWhiteSpace(body.NarrativeTense) ? null : body.NarrativeTense;
-        if (body.BeginningStateJson is not null)
-            scene.BeginningStateJson = string.IsNullOrWhiteSpace(body.BeginningStateJson) ? null : body.BeginningStateJson;
-
-        if (body.LatestDraftText is not null)
-            scene.LatestDraftText = body.LatestDraftText;
-        if (body.ClearPendingPostState == true)
-            scene.PendingPostStateJson = null;
-        else if (body.PendingPostStateJson is not null)
-            scene.PendingPostStateJson = body.PendingPostStateJson;
-        if (body.GenerationRunId is Guid runId && body.FinalDraftText is not null)
+        try
         {
-            var run = await _db.GenerationRuns.FirstOrDefaultAsync(r => r.Id == runId && r.SceneId == sceneId, cancellationToken);
-            if (run is not null)
-                run.FinalDraftText = body.FinalDraftText;
+            if (body.Title is not null)
+                scene.Title = body.Title;
+            if (body.Synopsis is not null)
+                scene.Synopsis = body.Synopsis;
+            if (body.Instructions is not null)
+                scene.Instructions = body.Instructions;
+            if (body.ExpectedEndStateNotes is not null)
+                scene.ExpectedEndStateNotes = string.IsNullOrWhiteSpace(body.ExpectedEndStateNotes) ? null : body.ExpectedEndStateNotes;
+            if (body.NarrativePerspective is not null)
+                scene.NarrativePerspective = string.IsNullOrWhiteSpace(body.NarrativePerspective) ? null : body.NarrativePerspective;
+            if (body.NarrativeTense is not null)
+                scene.NarrativeTense = string.IsNullOrWhiteSpace(body.NarrativeTense) ? null : body.NarrativeTense;
+            if (body.BeginningStateJson is not null)
+            {
+                if (string.IsNullOrWhiteSpace(body.BeginningStateJson))
+                    scene.BeginningStateJson = null;
+                else
+                    scene.BeginningStateJson = LlmJson.NormalizeStateJsonOrThrow(body.BeginningStateJson, "Beginning state JSON");
+            }
+            if (body.BeginningStateProse is not null)
+                scene.BeginningStateProse = string.IsNullOrWhiteSpace(body.BeginningStateProse) ? null : body.BeginningStateProse;
+
+            if (body.LatestDraftText is not null)
+                scene.LatestDraftText = body.LatestDraftText;
+            if (body.ClearPendingPostState == true)
+                scene.PendingPostStateJson = null;
+            else if (body.PendingPostStateJson is not null)
+                scene.PendingPostStateJson = body.PendingPostStateJson;
+            if (body.GenerationRunId is Guid runId && body.FinalDraftText is not null)
+            {
+                var run = await _db.GenerationRuns.FirstOrDefaultAsync(r => r.Id == runId && r.SceneId == sceneId, cancellationToken);
+                if (run is not null)
+                    run.FinalDraftText = body.FinalDraftText;
+            }
+
+            await _db.SaveChangesAsync(cancellationToken);
+            return NoContent();
         }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+    }
+
+    /// <summary>Clears finalized manuscript and approved end-state so the scene can be drafted again.</summary>
+    [HttpPost("scenes/{sceneId:guid}/manuscript/clear")]
+    public async Task<ActionResult> ClearSceneManuscript(Guid sceneId, CancellationToken cancellationToken)
+    {
+        var scene = await _db.Scenes.FirstOrDefaultAsync(s => s.Id == sceneId, cancellationToken);
+        if (scene is null)
+            return NotFound();
+
+        scene.ManuscriptText = null;
+        scene.ApprovedStateTableJson = null;
+        scene.LatestDraftText = null;
+        scene.LlmThinkingNotes = null;
+        scene.PendingPostStateJson = null;
 
         await _db.SaveChangesAsync(cancellationToken);
         return NoContent();
@@ -150,31 +252,12 @@ public sealed class SceneWorkflowController : ControllerBase
             return NotFound();
 
         var bookId = scene.Chapter.BookId;
-        var orderedIds = await _db.Scenes.AsNoTracking()
-            .Include(s => s.Chapter)
-            .Where(s => s.Chapter.BookId == bookId)
-            .OrderBy(s => s.Chapter.Order).ThenBy(s => s.Order)
-            .Select(s => s.Id)
-            .ToListAsync(cancellationToken);
+        var orderedIds = await SceneContinuityResolver.GetOrderedSceneIdsInBookAsync(_db, bookId, cancellationToken);
         var idx = orderedIds.IndexOf(sceneId);
         var hasPrev = idx > 0;
         string? prevEnd = null;
         if (hasPrev)
-        {
-            var prevSceneId = orderedIds[idx - 1];
-            var prevRun = await _db.GenerationRuns.AsNoTracking()
-                .Where(r => r.SceneId == prevSceneId && r.Status == GenerationRunStatus.Succeeded)
-                .OrderByDescending(r => r.CompletedAt)
-                .FirstOrDefaultAsync(cancellationToken);
-            if (prevRun is not null)
-            {
-                var snap = await _db.StateSnapshots.AsNoTracking()
-                    .Where(s => s.GenerationRunId == prevRun.Id && s.Step == PipelineStep.PostState)
-                    .OrderByDescending(s => s.CreatedAt)
-                    .FirstOrDefaultAsync(cancellationToken);
-                prevEnd = snap?.StateJson;
-            }
-        }
+            prevEnd = await SceneContinuityResolver.GetPreviousSceneEndStateJsonAsync(_db, sceneId, cancellationToken);
 
         string? defP = null;
         string? defT = null;
@@ -248,6 +331,7 @@ public sealed class SceneWorkflowController : ControllerBase
         public string? NarrativePerspective { get; set; }
         public string? NarrativeTense { get; set; }
         public string? BeginningStateJson { get; set; }
+        public string? BeginningStateProse { get; set; }
         public string? LatestDraftText { get; set; }
         public string? PendingPostStateJson { get; set; }
         /// <summary>When true, clears pending post-state JSON on the scene.</summary>
@@ -263,6 +347,22 @@ public sealed class SceneWorkflowController : ControllerBase
         public string? PreviousSceneEndStateJson { get; set; }
         public string? DefaultNarrativePerspective { get; set; }
         public string? DefaultNarrativeTense { get; set; }
+    }
+
+    public sealed class DeriveBeginningStateResponse
+    {
+        public string BeginningStateJson { get; set; } = "";
+        public bool DerivedFromPreviousScene { get; set; }
+    }
+
+    public sealed class ConvertBeginningStateFromProseBody
+    {
+        public string? Prose { get; set; }
+    }
+
+    public sealed class ConvertBeginningStateFromProseResponse
+    {
+        public string BeginningStateJson { get; set; } = "";
     }
 
     public sealed class SuggestWorldElementsBody

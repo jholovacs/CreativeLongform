@@ -5,7 +5,7 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { HubConnection } from '@microsoft/signalr';
 import { forkJoin, Subject, Subscription } from 'rxjs';
 import { concatMap, debounceTime, distinctUntilChanged, takeUntil } from 'rxjs/operators';
-import { formatJsonPretty } from '../core/json-format';
+import { formatJsonPretty, isEmptyStateJson, jsonFieldToText } from '../core/json-format';
 import { Book, Chapter, Scene, WorldElement } from '../models/entities';
 import { GenerationService, GenerationProgressPayload } from '../services/generation.service';
 import { ODataService } from '../services/odata.service';
@@ -18,6 +18,7 @@ import { SCENE_WORKFLOW_FIELD_HELP } from './scene-workflow-field-help';
 type SceneWorkflowPanelKey =
   | 'storyPosition'
   | 'manuscript'
+  | 'llmThinkingNotes'
   | 'synopsis'
   | 'voice'
   | 'beginningState'
@@ -71,6 +72,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   panelOpen: Record<SceneWorkflowPanelKey, boolean> = {
     storyPosition: true,
     manuscript: true,
+    llmThinkingNotes: false,
     synopsis: true,
     voice: true,
     beginningState: false,
@@ -96,7 +98,12 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   narrativePerspective = '';
   narrativeTense = '';
   beginningStateJson = '';
+  beginningStateProse = '';
+  beginningStateTab: 'json' | 'prose' = 'json';
   chapterComplete = false;
+  deriveBeginningStateBusy = false;
+  convertBeginningStateFromProseBusy = false;
+  clearManuscriptBusy = false;
 
   worldElementsPage: WorldElement[] = [];
   worldElementsTotalCount = 0;
@@ -442,8 +449,16 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   }
 
   get beginningStateSummary(): string {
-    if (!this.beginningStateJson.trim()) return 'Empty — prior scene end-state when available';
+    if (isEmptyStateJson(this.beginningStateJson)) {
+      return this.beginningStateProse.trim()
+        ? this.truncate(this.beginningStateProse, 80)
+        : 'Empty — prior scene end-state when available';
+    }
     return this.truncate(this.beginningStateJson, 80);
+  }
+
+  get beginningStateLlmBusy(): boolean {
+    return this.deriveBeginningStateBusy || this.convertBeginningStateFromProseBusy;
   }
 
   get worldElementsSummary(): string {
@@ -470,6 +485,16 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
 
   get manuscriptSummary(): string {
     const t = this.sceneManuscript;
+    return t ? this.truncate(t, 72) : '';
+  }
+
+  /** Model reasoning stripped from draft/manuscript prose (stored per scene). */
+  get sceneLlmThinkingNotes(): string {
+    return this.currentScene()?.llmThinkingNotes?.trim() ?? '';
+  }
+
+  get llmThinkingNotesSummary(): string {
+    const t = this.sceneLlmThinkingNotes;
     return t ? this.truncate(t, 72) : '';
   }
 
@@ -502,6 +527,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
       this.narrativePerspective = '';
       this.narrativeTense = '';
       this.beginningStateJson = '';
+      this.beginningStateProse = '';
       this.chapterComplete = false;
       return;
     }
@@ -510,7 +536,8 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.expectedEnd = s.expectedEndStateNotes ?? '';
     this.narrativePerspective = s.narrativePerspective ?? '';
     this.narrativeTense = s.narrativeTense ?? '';
-    this.beginningStateJson = formatJsonPretty(s.beginningStateJson ?? '');
+    this.beginningStateJson = formatJsonPretty(s.beginningStateJson);
+    this.beginningStateProse = s.beginningStateProse ?? '';
     this.chapterComplete = ch?.isComplete ?? false;
     this.applyPanelDefaultsFromPersistedSceneFields(s);
   }
@@ -537,9 +564,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
         if (!this.narrativeTense.trim() && ctx.defaultNarrativeTense) {
           this.narrativeTense = ctx.defaultNarrativeTense;
         }
-        if (!this.beginningStateJson.trim() && ctx.previousSceneEndStateJson) {
-          this.beginningStateJson = formatJsonPretty(ctx.previousSceneEndStateJson);
-        }
+        this.applyPreviousSceneEndDefault(ctx.previousSceneEndStateJson);
       },
       error: () => {
         /* optional */
@@ -547,28 +572,147 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     });
   }
 
+  /** Default beginning state from the prior scene’s end-state when this scene has none saved. */
+  private applyPreviousSceneEndDefault(previousSceneEndStateJson: string | null | undefined): void {
+    if (!previousSceneEndStateJson || isEmptyStateJson(previousSceneEndStateJson)) {
+      return;
+    }
+    const savedOnScene = this.currentScene()?.beginningStateJson;
+    if (!isEmptyStateJson(savedOnScene) && jsonFieldToText(savedOnScene).trim()) {
+      return;
+    }
+    if (!isEmptyStateJson(this.beginningStateJson)) {
+      return;
+    }
+    this.beginningStateJson = formatJsonPretty(previousSceneEndStateJson);
+  }
+
+  deriveBeginningState(): void {
+    if (!this.selectedSceneId || this.deriveBeginningStateBusy) return;
+    this.deriveBeginningStateBusy = true;
+    this.error = null;
+    this.sceneWorkflow.deriveBeginningState(this.selectedSceneId).subscribe({
+      next: (res) => {
+        this.deriveBeginningStateBusy = false;
+        const raw =
+          res.beginningStateJson ??
+          (res as { BeginningStateJson?: unknown }).BeginningStateJson;
+        const json = jsonFieldToText(raw).trim();
+        if (isEmptyStateJson(json)) {
+          this.error =
+            'Beginning state came back empty. Ensure the previous scene has manuscript or draft text, then try again.';
+          return;
+        }
+        this.applyDerivedBeginningState(json);
+      },
+      error: (err) => {
+        this.deriveBeginningStateBusy = false;
+        const msg = err?.error?.message ?? err?.error ?? 'Could not derive beginning state.';
+        this.error = typeof msg === 'string' ? msg : 'Could not derive beginning state.';
+      }
+    });
+  }
+
+  /** Show derived JSON in the form and keep the in-memory book list in sync (avoid reload stomp). */
+  private applyDerivedBeginningState(json: string): void {
+    this.beginningStateJson = formatJsonPretty(json);
+    this.beginningStateTab = 'json';
+    const scene = this.currentScene();
+    if (scene) {
+      scene.beginningStateJson = json;
+    }
+  }
+
+  convertBeginningStateFromProse(): void {
+    if (!this.selectedSceneId || this.convertBeginningStateFromProseBusy) return;
+    const prose = this.beginningStateProse.trim();
+    if (!prose) {
+      this.error = 'Enter a plain-language description of the scene-opening state first.';
+      this.beginningStateTab = 'prose';
+      return;
+    }
+    this.convertBeginningStateFromProseBusy = true;
+    this.error = null;
+    this.sceneWorkflow.convertBeginningStateFromProse(this.selectedSceneId, prose).subscribe({
+      next: (res) => {
+        this.convertBeginningStateFromProseBusy = false;
+        const json =
+          res.beginningStateJson ??
+          (res as { BeginningStateJson?: unknown }).BeginningStateJson;
+        if (typeof json !== 'string' || isEmptyStateJson(json)) {
+          this.error =
+            'Conversion returned empty JSON. Check Ollama and the pre-state model, then try again.';
+          return;
+        }
+        this.applyDerivedBeginningState(json);
+        const scene = this.currentScene();
+        if (scene) {
+          scene.beginningStateProse = prose;
+        }
+      },
+      error: (err: { error?: string | { message?: string } }) => {
+        this.convertBeginningStateFromProseBusy = false;
+        const body = err.error;
+        this.error =
+          typeof body === 'string'
+            ? body
+            : (body?.message ?? 'Could not convert beginning-state prose to JSON.');
+      }
+    });
+  }
+
+  clearSceneManuscript(): void {
+    if (!this.selectedSceneId || this.clearManuscriptBusy || !this.sceneManuscript) return;
+    if (
+      !confirm(
+        'Remove the finalized manuscript and approved end-state for this scene? You can generate and finalize a new draft afterward. Later scenes keep their saved beginning state until you update them.'
+      )
+    ) {
+      return;
+    }
+    this.clearManuscriptBusy = true;
+    this.error = null;
+    this.sceneWorkflow.clearSceneManuscript(this.selectedSceneId).subscribe({
+      next: () => {
+        this.clearManuscriptBusy = false;
+        this.loadBooks();
+      },
+      error: () => {
+        this.clearManuscriptBusy = false;
+        this.error = 'Could not clear the finalized manuscript.';
+      }
+    });
+  }
+
+  /** Persists synopsis, voice, and beginning state without reloading the book list. */
+  private patchSceneFields$() {
+    if (!this.selectedSceneId) {
+      throw new Error('No scene selected');
+    }
+    return this.sceneWorkflow.patchScene(this.selectedSceneId, {
+      synopsis: this.synopsis,
+      instructions: this.instructions,
+      expectedEndStateNotes: this.expectedEnd || null,
+      narrativePerspective: this.narrativePerspective || null,
+      narrativeTense: this.narrativeTense || null,
+      beginningStateJson: this.beginningStateJson || null,
+      beginningStateProse: this.beginningStateProse || null
+    });
+  }
+
   saveSceneFields(): void {
     if (!this.selectedSceneId) return;
     this.worldBusy = true;
     this.error = null;
-    this.sceneWorkflow
-      .patchScene(this.selectedSceneId, {
-        synopsis: this.synopsis,
-        instructions: this.instructions,
-        expectedEndStateNotes: this.expectedEnd || null,
-        narrativePerspective: this.narrativePerspective || null,
-        narrativeTense: this.narrativeTense || null,
-        beginningStateJson: this.beginningStateJson || null
-      })
-      .subscribe({
-        next: () => {
-          this.worldBusy = false;
-          this.loadBooks();
-        },
-        error: () => {
-          this.worldBusy = false;
-        }
-      });
+    this.patchSceneFields$().subscribe({
+      next: () => {
+        this.worldBusy = false;
+        this.loadBooks();
+      },
+      error: () => {
+        this.worldBusy = false;
+      }
+    });
   }
 
   toggleChapterComplete(): void {
@@ -1139,6 +1283,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.generationStartSub = this.world
       .putSceneWorldElements(sceneId, [...this.selectedWorldIds])
       .pipe(
+        concatMap(() => this.patchSceneFields$()),
         concatMap(() =>
           this.generation.startGeneration(sceneId, {
             stopAfterDraft: true,

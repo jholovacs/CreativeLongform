@@ -25,6 +25,8 @@ export interface CorrectDraftResponse {
   correctedDraftText: string;
   /** Updated post-scene state if the model returned one. */
   pendingPostStateJson: string | null;
+  /** Extracted model reasoning notes for this scene (if any). */
+  llmThinkingNotes?: string | null;
 }
 
 /** Server defaults for generation UI (GET /api/settings/generation). */

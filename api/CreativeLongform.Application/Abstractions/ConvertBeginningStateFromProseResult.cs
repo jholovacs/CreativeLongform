@@ -1,0 +1,3 @@
+namespace CreativeLongform.Application.Abstractions;
+
+public sealed record ConvertBeginningStateFromProseResult(string BeginningStateJson);

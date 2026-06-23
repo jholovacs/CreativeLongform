@@ -11,6 +11,12 @@ export const SCENE_WORKFLOW_FIELD_HELP = {
   manuscriptPanel:
     'Finalized prose for this scene only. It is not replaced when you run Generate again; use the Draft workspace for the new run.',
 
+  clearSceneManuscript:
+    'Remove finalized manuscript and approved end-state for this scene so you can generate and finalize a new draft.',
+
+  llmThinkingNotesPanel:
+    'Reasoning the model returned in thinking blocks. This is not part of your manuscript — stored here for reference only.',
+
   synopsis:
     'Main beat and purpose of this scene for generation. Example: Mara confronts her brother at the docks about the forged letter.',
   instructions:
@@ -24,7 +30,16 @@ export const SCENE_WORKFLOW_FIELD_HELP = {
     'Verb tense for the prose. Example: past, present. Defaults from earlier scenes when left blank on open.',
 
   beginningStateJson:
-    'JSON continuity snapshot at scene start (environment.setting, spatial layout/proximity, characters with pose, clothing, emotionalState, relativeToOthers, topOfMind, etc.). Empty uses the previous scene’s approved end-state when available.',
+    'JSON continuity snapshot at scene start. Defaults from the previous scene’s end-state when this scene has none saved. Generation uses the saved value.',
+
+  beginningStateProse:
+    'Describe who is present, where they are, mood, and other facts at scene open in plain language. Use Convert to JSON to produce the schema snapshot used for generation.',
+
+  convertBeginningStateFromProse:
+    'Run the pre-state model to translate your prose description into schema-compliant beginning-state JSON. Uses your prose and prior-scene continuity only — not the scene synopsis.',
+
+  deriveBeginningState:
+    'Re-infer beginning state with the LLM. With a prior scene: merge that scene’s beginning state through its manuscript into this scene’s entry state. Without a prior scene: work backward from this scene’s synopsis (and draft/manuscript if present) to infer state at open.',
 
   worldElementsSearch:
     'Server-side filter: title, kind, summary, or detail (case-insensitive). Example: harbor or Character.',

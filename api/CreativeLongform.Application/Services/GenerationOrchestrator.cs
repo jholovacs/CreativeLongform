@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Text.Json;
 using CreativeLongform.Application.Abstractions;
 using CreativeLongform.Application.Generation;
+using CreativeLongform.Application.Narrative;
 using CreativeLongform.Application.Options;
 using CreativeLongform.Application.WorldBuilding;
 using CreativeLongform.Domain.Entities;
@@ -31,6 +32,15 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
     private const string ShowDontTellEmphasis =
         """
         Show, don't tell: dramatize through concrete action, dialogue, sensory detail, and on-page behavior; avoid naming emotions or motives in the abstract, slogan-like summaries of feelings, or narrator lectures where the scene could imply them. Let the reader infer interiority from what characters do and say.
+        """;
+
+    /// <summary>Prose generation: beginning-state JSON is for continuity, not on-page recitation.</summary>
+    private const string BeginningStateContinuityForProseRule =
+        """
+        BEGINNING STATE — internal continuity only: You receive a short continuity anchor (not the full state table). Use it to stay consistent about who is present and where the scene opens. Do NOT recite, summarize, or explicitly narrate state-table inventory (pose, clothing, mood labels, topOfMind lists, spatial blocking as exposition). Do not open by restating what readers already know from the prior scene.
+        First paragraph must start with action, dialogue, or concrete sensory detail — never a character-status inventory.
+        BAD: "Mara stood in the kitchen wearing a blue apron, anxious, thinking about the letter."
+        GOOD: "Mara scraped burnt toast into the sink." (same continuity, no restated inventory)
         """;
 
     /// <summary>
@@ -118,7 +128,37 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         You MAY set stable facts true at entry: location, who is present, weather, ongoing tensions that already existed before this scene, clothing, pose, prior continuity from the previous scene’s end-state (including prior injuries from earlier story), and emotional baseline before the inciting moment.
         """;
 
+    /// <summary>Author-prose conversion: synopsis/instructions describe later beats — not inputs for this snapshot.</summary>
+    private const string AuthorProsePreStateBoundaryRule =
+        """
+        SOURCE BOUNDARY (critical): The author's plain-language beginning-state description is the ONLY narrative source for this snapshot.
+        Scene synopsis and additional instructions are NOT provided — they describe what happens after scene entry and must not be inferred or imported.
+        Prior scene end-state JSON (when present) is continuity context only; reconcile names and stable facts with the author prose, not with future scene beats.
+        Encode only facts true at scene entry as described in the author prose (and defensible carry-forward from prior end-state when the prose is silent).
+        """;
+
+    private const string InventionScopeFromAuthorProseRule =
+        """
+        HARD CONSTRAINT — DO NOT INVENT beyond allowed sources: Named people, relationships, locations, objects, and plot facts must be grounded in the author beginning-state prose, prior scene end-state JSON when present, and linked world-building when present. Do not introduce characters, events, injuries, revelations, or relationship shifts that appear only in scene synopsis (not supplied here) or other future plot beats.
+        """;
+
+    /// <summary>No prior scene: infer entry state by working backward from this scene's brief and optional prose.</summary>
+    private const string FirstSceneBackwardInferenceRule =
+        """
+        BACKWARD INFERENCE (no prior scene handoff): There is no previous scene end-state to carry forward.
+        The synopsis/instructions and any scene prose below describe events that occur DURING this scene — after scene entry.
+        Infer the narrative state at scene ENTRY: the instant before the first beat of action in the synopsis or the opening line of the prose.
+        Work backward — remove injuries, deaths, revelations, location changes, and relationship shifts that the synopsis or prose establish as happening during this scene; reconstruct who is on stage, where they are, baseline mood, clothing, pose, and stable facts at open.
+        Do not encode synopsis or prose outcomes as already true at entry. Fill the full JSON snapshot for scene open.
+        """;
+
     private sealed record PipelineProgress(IGenerationProgressNotifier Notifier, Func<long> ElapsedMs);
+
+    private sealed record LlmAuditContext(Guid? GenerationRunId, Guid? BookId)
+    {
+        public static LlmAuditContext ForRun(Guid runId) => new(runId, null);
+        public static LlmAuditContext ForBook(Guid bookId) => new(null, bookId);
+    }
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<GenerationOrchestrator> _logger;
@@ -239,7 +279,8 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         var worldElementIds = scene.SceneWorldElements.Select(swe => swe.WorldElementId).ToHashSet();
         var scopedLinks = await LoadSceneScopedWorldElementLinksAsync(db, worldElementIds, cancellationToken);
         var worldBlock = WorldContextBuilder.Build(book, worldElements, scopedLinks);
-        var draft = (acceptedDraftText ?? run.FinalDraftText ?? string.Empty).Trim();
+        var draftRaw = (acceptedDraftText ?? run.FinalDraftText ?? string.Empty).Trim();
+        var draft = ApplyLlmDraftFromModel(scene, draftRaw);
         if (string.IsNullOrEmpty(draft))
             throw new InvalidOperationException("No draft text to finalize.");
 
@@ -248,20 +289,39 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             .OrderByDescending(s => s.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
         var stateBefore = ResolveStateBeforeJsonForRun(preSnap?.StateJson, scene.BeginningStateJson);
+        if (LlmJson.IsEmptyJsonObject(stateBefore))
+        {
+            var previousEnd = await SceneContinuityResolver.GetPreviousSceneEndStateJsonAsync(db, sceneId, cancellationToken);
+            var usablePrevious = LlmJson.FirstUsableStateJson(previousEnd);
+            if (usablePrevious is not null)
+                stateBefore = usablePrevious;
+        }
+        stateBefore = LlmJson.FirstUsableStateJson(stateBefore) ?? "{}";
 
         string stateAfter;
         if (!string.IsNullOrWhiteSpace(approvedStateTableJson))
         {
-            stateAfter = approvedStateTableJson.Trim();
+            stateAfter = LlmJson.NormalizeStateJsonOrThrow(approvedStateTableJson.Trim(), "Approved state table JSON");
             await SaveSnapshotAsync(db, generationRunId, PipelineStep.PostState, stateAfter, cancellationToken);
         }
         else
         {
+            var postStateFallback = await ResolvePostStateFallbackAsync(db, generationRunId, scene, stateBefore, cancellationToken);
             await NotifyStepAsync(notifier, generationRunId, PipelineStep.PostState, finalizeProgress.ElapsedMs,
                 "Finalize: deriving post-scene state from accepted prose (merged from scene start state).", cancellationToken);
-            stateAfter = await GeneratePostStateAsync(db, ollama, postStateModel, run, scene, stateBefore, draft, worldBlock, finalizeProgress, cancellationToken);
+            stateAfter = await ResolvePostStateJsonAsync(
+                db, ollama, postStateModel, LlmAuditContext.ForRun(generationRunId), scene,
+                stateBefore, draft, worldBlock, postStateFallback, finalizeProgress, cancellationToken,
+                failureMessage:
+                    "Finalize post-state produced empty JSON and no end-state preview is available. " +
+                    "Ensure Ollama is running and Settings → Ollama models has a post-state model configured, " +
+                    "set beginning state for this scene, or finalize the previous scene first.");
             await SaveSnapshotAsync(db, generationRunId, PipelineStep.PostState, stateAfter, cancellationToken);
         }
+
+        if (LlmJson.IsEmptyJsonObject(stateAfter))
+            throw new InvalidOperationException(
+                "Finalize produced an empty end-state table. Ensure Ollama is running, then try again or edit the state table in the draft workspace before finalizing.");
 
         await NotifyStepAsync(notifier, generationRunId, PipelineStep.TransitionCheck, finalizeProgress.ElapsedMs,
             "Finalize: continuity check across before / prose / after.", cancellationToken);
@@ -287,40 +347,37 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         scene.PendingPostStateJson = null;
 
         Guid? nextSceneId = null;
-        if (!scene.Chapter.IsComplete)
+        var chapterId = scene.ChapterId;
+        var currentOrder = scene.Order;
+
+        var existingNext = await db.Scenes
+            .Where(s => s.ChapterId == chapterId && s.Order > currentOrder)
+            .OrderBy(s => s.Order)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (existingNext is not null)
         {
-            var chapterId = scene.ChapterId;
-            var currentOrder = scene.Order;
-
-            var existingNext = await db.Scenes
-                .Where(s => s.ChapterId == chapterId && s.Order > currentOrder)
-                .OrderBy(s => s.Order)
-                .FirstOrDefaultAsync(cancellationToken);
-
-            if (existingNext is not null)
+            existingNext.BeginningStateJson = stateAfter;
+            nextSceneId = existingNext.Id;
+        }
+        else if (!scene.Chapter.IsComplete)
+        {
+            var insertOrder = currentOrder + 1;
+            var newId = Guid.NewGuid();
+            db.Scenes.Add(new Scene
             {
-                existingNext.BeginningStateJson = stateAfter;
-                nextSceneId = existingNext.Id;
-            }
-            else
-            {
-                var insertOrder = currentOrder + 1;
-                var newId = Guid.NewGuid();
-                db.Scenes.Add(new Scene
-                {
-                    Id = newId,
-                    ChapterId = chapterId,
-                    Order = insertOrder,
-                    Title = $"Scene {insertOrder}",
-                    Synopsis = string.Empty,
-                    Instructions =
-                        "Describe what happens in this scene. Revise this instruction in the scene workflow when you are ready to draft.",
-                    NarrativePerspective = scene.NarrativePerspective,
-                    NarrativeTense = scene.NarrativeTense,
-                    BeginningStateJson = stateAfter
-                });
-                nextSceneId = newId;
-            }
+                Id = newId,
+                ChapterId = chapterId,
+                Order = insertOrder,
+                Title = $"Scene {insertOrder}",
+                Synopsis = string.Empty,
+                Instructions =
+                    "Describe what happens in this scene. Revise this instruction in the scene workflow when you are ready to draft.",
+                NarrativePerspective = scene.NarrativePerspective,
+                NarrativeTense = scene.NarrativeTense,
+                BeginningStateJson = stateAfter
+            });
+            nextSceneId = newId;
         }
 
         await db.SaveChangesAsync(cancellationToken);
@@ -354,6 +411,103 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
                 "Failed to delete generation runs for scene {SceneId} after finalize; manuscript is already saved.",
                 sceneId);
         }
+    }
+
+    public async Task<DeriveBeginningStateResult> DeriveBeginningStateAsync(Guid sceneId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ICreativeLongformDbContext>();
+        var ollama = scope.ServiceProvider.GetRequiredService<IOllamaClient>();
+        var modelPrefs = scope.ServiceProvider.GetRequiredService<IOllamaModelPreferencesService>();
+
+        var scene = await db.Scenes
+            .Include(s => s.Chapter)
+            .ThenInclude(c => c.Book)
+            .Include(s => s.SceneWorldElements)
+            .ThenInclude(swe => swe.WorldElement)
+            .FirstOrDefaultAsync(s => s.Id == sceneId, cancellationToken);
+        if (scene is null)
+            throw new InvalidOperationException("Scene not found.");
+
+        var preStateModel = await modelPrefs.GetPreStateModelAsync(cancellationToken);
+        var postStateModel = await modelPrefs.GetPostStateModelAsync(cancellationToken);
+        var audit = LlmAuditContext.ForBook(scene.Chapter.BookId);
+        var worldBlock = await BuildWorldBlockForSceneAsync(db, scene, cancellationToken);
+
+        var prevSceneId = await SceneContinuityResolver.GetPreviousSceneIdInBookAsync(db, sceneId, cancellationToken);
+        string beginningState;
+        if (prevSceneId is Guid prevId)
+        {
+            var prevScene = await db.Scenes.AsNoTracking()
+                .Include(s => s.Chapter)
+                .ThenInclude(c => c.Book)
+                .Include(s => s.SceneWorldElements)
+                .ThenInclude(swe => swe.WorldElement)
+                .FirstAsync(s => s.Id == prevId, cancellationToken);
+            var prevEndApproved = await SceneContinuityResolver.GetSceneEndStateJsonAsync(db, prevId, cancellationToken);
+            var prevBeginning = await ResolveSceneBeginningStateJsonAsync(db, prevScene, cancellationToken);
+            var prevProse = await ResolveSceneProseForStateDeriveAsync(db, prevScene, cancellationToken);
+            if (string.IsNullOrEmpty(prevProse))
+                throw new InvalidOperationException(
+                    "Previous scene has no manuscript or draft text. Finalize the previous scene in the draft workspace, or generate a draft there first.");
+
+            var prevWorldBlock = await BuildWorldBlockForSceneAsync(db, prevScene, cancellationToken);
+            beginningState = await ResolvePostStateJsonAsync(
+                db, ollama, postStateModel, audit, prevScene, prevBeginning, prevProse,
+                prevWorldBlock, prevEndApproved, progress: null, cancellationToken,
+                stepLabel: "Handoff from previous scene",
+                failureMessage:
+                    "Could not derive beginning state from the previous scene's beginning state and manuscript. " +
+                    "Ensure Ollama is running and Settings → Ollama models has a post-state model configured.");
+        }
+        else
+        {
+            var currentProse = await ResolveSceneProseForStateDeriveAsync(db, scene, cancellationToken);
+            beginningState = await ResolveBeginningStateFromCurrentSceneAsync(
+                db, ollama, preStateModel, audit, scene, currentProse, worldBlock, cancellationToken);
+        }
+
+        scene.BeginningStateJson = LlmJson.NormalizeStateJsonOrThrow(beginningState, "Beginning state JSON");
+        await db.SaveChangesAsync(cancellationToken);
+
+        return new DeriveBeginningStateResult(scene.BeginningStateJson, prevSceneId.HasValue);
+    }
+
+    public async Task<ConvertBeginningStateFromProseResult> ConvertBeginningStateFromProseAsync(Guid sceneId,
+        string authorProse, CancellationToken cancellationToken = default)
+    {
+        var prose = authorProse.Trim();
+        if (string.IsNullOrEmpty(prose))
+            throw new ArgumentException("Beginning state prose is required.", nameof(authorProse));
+
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ICreativeLongformDbContext>();
+        var ollama = scope.ServiceProvider.GetRequiredService<IOllamaClient>();
+        var modelPrefs = scope.ServiceProvider.GetRequiredService<IOllamaModelPreferencesService>();
+
+        var scene = await db.Scenes
+            .Include(s => s.Chapter)
+            .ThenInclude(c => c.Book)
+            .Include(s => s.SceneWorldElements)
+            .ThenInclude(swe => swe.WorldElement)
+            .FirstOrDefaultAsync(s => s.Id == sceneId, cancellationToken);
+        if (scene is null)
+            throw new InvalidOperationException("Scene not found.");
+
+        var preStateModel = await modelPrefs.GetPreStateModelAsync(cancellationToken);
+        var audit = LlmAuditContext.ForBook(scene.Chapter.BookId);
+        var worldBlock = await BuildWorldBlockForSceneAsync(db, scene, cancellationToken, authorProseBeginningState: true);
+        var priorEnd = await SceneContinuityResolver.GetPreviousSceneEndStateJsonAsync(db, sceneId, cancellationToken);
+
+        var beginningState = await ResolveBeginningStateFromProseAsync(
+            db, ollama, preStateModel, audit, scene, prose, priorEnd, worldBlock, cancellationToken);
+
+        scene.BeginningStateProse = prose;
+        scene.BeginningStateJson = LlmJson.NormalizeStateJsonOrThrow(beginningState, "Beginning state JSON");
+        await db.SaveChangesAsync(cancellationToken);
+
+        return new ConvertBeginningStateFromProseResult(scene.BeginningStateJson);
     }
 
     public async Task<CorrectDraftResult> CorrectDraftAsync(Guid sceneId, Guid generationRunId, string userInstruction,
@@ -421,15 +575,21 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             correctSw.ElapsedMilliseconds, null, null);
         var text = await RepairDraftWithUserInstructionAsync(db, ollama, writer, run, scene, draft, ins, worldBlock,
             stateBeforeJson, selectionStart, selectionEnd, cancellationToken, correctProgress);
+        text = ApplyLlmDraftFromModel(scene, text);
+        text = GuardDraftProse(text, generationRunId, "correct draft", stateBeforeJson);
         run.FinalDraftText = text;
         scene.LatestDraftText = text;
         await db.SaveChangesAsync(cancellationToken);
 
-        var postState = await GeneratePostStateAsync(db, ollama, postStateModel, run, scene, stateBeforeJson, text, worldBlock, progress: null, cancellationToken);
+        var postState = await ResolvePostStateJsonAsync(
+            db, ollama, postStateModel, LlmAuditContext.ForRun(generationRunId), scene,
+            stateBeforeJson, text, worldBlock,
+            LlmJson.FirstUsableStateJson(scene.PendingPostStateJson, stateBeforeJson),
+            progress: null, cancellationToken, stepLabel: "Correct draft post-state");
         await SaveSnapshotAsync(db, generationRunId, PipelineStep.PostState, postState, cancellationToken);
         scene.PendingPostStateJson = postState;
         await db.SaveChangesAsync(cancellationToken);
-        return new CorrectDraftResult(text, postState);
+        return new CorrectDraftResult(text, postState, scene.LlmThinkingNotes);
     }
 
     private async Task ExecutePipelineAsync(Guid runId, CancellationToken cancellationToken)
@@ -509,20 +669,24 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
                     async (system, user, ct) =>
                     {
                         var o = new OllamaChatOptions { NumPredict = agentPredict };
-                        return await ChatAndLogAsync(db, ollama, agentModel, run.Id, PipelineStep.AgentEdit, system, user,
+                        return await ChatAndLogForRunAsync(db, ollama, agentModel, run.Id, PipelineStep.AgentEdit, system, user,
                             jsonFormat: true, o, ct, progress, "Agent edit turn (JSON tools)");
                     },
                     notifier,
                     runId,
                     progress.ElapsedMs,
                     cancellationToken);
+                draft = GuardDraftProse(draft, runId, "agentic edit", stateBefore);
             }
 
             if (!run.StopAfterDraft)
             {
                 await NotifyStepAsync(notifier, runId, PipelineStep.PostState, progress.ElapsedMs,
                     "Post-state: deriving narrative state from the finished prose.", cancellationToken);
-                var stateAfter = await GeneratePostStateAsync(db, ollama, postStateModel, run, scene, stateBefore, draft, worldBlock, progress, cancellationToken);
+                var stateAfter = await ResolvePostStateJsonAsync(
+                    db, ollama, postStateModel, LlmAuditContext.ForRun(runId), scene,
+                    stateBefore, draft, worldBlock, stateBefore, progress, cancellationToken,
+                    stepLabel: "Pipeline post-state");
                 await SaveSnapshotAsync(db, runId, PipelineStep.PostState, stateAfter, cancellationToken);
 
                 await NotifyStepAsync(notifier, runId, PipelineStep.TransitionCheck, progress.ElapsedMs,
@@ -532,7 +696,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
                     _logger.LogWarning("Transition check reported gaps for run {RunId}", runId);
             }
 
-            var text = draft;
+            var text = ApplyLlmDraftFromModel(scene, draft);
 
             await NotifyStepAsync(notifier, runId, PipelineStep.Compliance, progress.ElapsedMs,
                 "Compliance: checking the draft against scene instructions and world context.", cancellationToken);
@@ -573,7 +737,10 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             {
                 await NotifyStepAsync(notifier, runId, PipelineStep.PostState, progress.ElapsedMs,
                     "Post-state: deriving end-of-scene narrative table from the draft (for review).", cancellationToken);
-                var postStateForReview = await GeneratePostStateAsync(db, ollama, postStateModel, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
+                var postStateForReview = await ResolvePostStateJsonAsync(
+                    db, ollama, postStateModel, LlmAuditContext.ForRun(runId), scene,
+                    stateBefore, text, worldBlock, stateBefore, progress, cancellationToken,
+                    stepLabel: "Draft review post-state");
                 await SaveSnapshotAsync(db, runId, PipelineStep.PostState, postStateForReview, cancellationToken);
                 scene.PendingPostStateJson = postStateForReview;
                 await db.SaveChangesAsync(cancellationToken);
@@ -608,6 +775,20 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             await notifier.NotifyAsync(runId, "RunFinished", "Failed", ex.Message, CancellationToken.None,
                 pipelineSw.ElapsedMilliseconds, null, null);
         }
+    }
+
+    private static string ApplyLlmDraftFromModel(Scene scene, string rawText)
+    {
+        var split = LlmProseSanitizer.SplitThinkingFromProse(rawText);
+        if (!string.IsNullOrWhiteSpace(split.ThinkingNotes))
+        {
+            scene.LlmThinkingNotes = string.IsNullOrWhiteSpace(scene.LlmThinkingNotes)
+                ? split.ThinkingNotes
+                : $"{scene.LlmThinkingNotes.Trim()}\n\n---\n\n{split.ThinkingNotes.Trim()}";
+        }
+        return DraftProseGuard.TrimOpeningStateRecitation(
+            DraftProseGuard.TrimRepetitiveLoops(split.Prose),
+            scene.BeginningStateJson);
     }
 
     private async Task PersistCancelledRunAsync(Guid runId, Stopwatch pipelineSw)
@@ -679,42 +860,91 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         ICreativeLongformDbContext db,
         Guid sceneId,
         CancellationToken cancellationToken)
-    {
-        var prevRun = await db.GenerationRuns
-            .AsNoTracking()
-            .Where(r => r.SceneId == sceneId && r.Status == GenerationRunStatus.Succeeded)
-            .OrderByDescending(r => r.CompletedAt)
-            .FirstOrDefaultAsync(cancellationToken);
-        if (prevRun is null)
-            return null;
-        var snap = await db.StateSnapshots
-            .AsNoTracking()
-            .Where(s => s.GenerationRunId == prevRun.Id && s.Step == PipelineStep.PostState)
-            .OrderByDescending(s => s.CreatedAt)
-            .FirstOrDefaultAsync(cancellationToken);
-        return snap?.StateJson;
-    }
+        => await SceneContinuityResolver.GetSceneEndStateJsonAsync(db, sceneId, cancellationToken);
 
     private static async Task<string?> GetPreviousSceneLastPostStateJsonAsync(
         ICreativeLongformDbContext db,
         Guid sceneId,
         CancellationToken cancellationToken)
+        => await SceneContinuityResolver.GetPreviousSceneEndStateJsonAsync(db, sceneId, cancellationToken);
+
+    private static async Task<Guid?> GetPreviousSceneIdAsync(
+        ICreativeLongformDbContext db,
+        Guid sceneId,
+        CancellationToken cancellationToken)
+        => await SceneContinuityResolver.GetPreviousSceneIdInBookAsync(db, sceneId, cancellationToken);
+
+    private static async Task<string> ResolveSceneBeginningStateJsonAsync(
+        ICreativeLongformDbContext db,
+        Scene scene,
+        CancellationToken cancellationToken)
     {
-        var scene = await db.Scenes.AsNoTracking()
-            .Include(s => s.Chapter)
-            .FirstAsync(s => s.Id == sceneId, cancellationToken);
-        var bookId = scene.Chapter.BookId;
-        var orderedIds = await db.Scenes.AsNoTracking()
-            .Include(s => s.Chapter)
-            .Where(s => s.Chapter.BookId == bookId)
-            .OrderBy(s => s.Chapter.Order).ThenBy(s => s.Order)
-            .Select(s => s.Id)
-            .ToListAsync(cancellationToken);
-        var idx = orderedIds.IndexOf(sceneId);
-        if (idx <= 0)
+        var fromRun = await GetLatestPreStateSnapshotJsonForSceneAsync(db, scene.Id, cancellationToken);
+        return LlmJson.FirstUsableStateJson(scene.BeginningStateJson, fromRun) ?? "{}";
+    }
+
+    private static async Task<string?> GetLatestPreStateSnapshotJsonForSceneAsync(
+        ICreativeLongformDbContext db,
+        Guid sceneId,
+        CancellationToken cancellationToken)
+    {
+        var run = await db.GenerationRuns
+            .AsNoTracking()
+            .Where(r => r.SceneId == sceneId && r.Status == GenerationRunStatus.Succeeded)
+            .OrderByDescending(r => r.CompletedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (run is null)
             return null;
-        var prevSceneId = orderedIds[idx - 1];
-        return await GetLastSucceededPostStateJsonForSceneAsync(db, prevSceneId, cancellationToken);
+        var snap = await db.StateSnapshots
+            .AsNoTracking()
+            .Where(s => s.GenerationRunId == run.Id && s.Step == PipelineStep.PreState)
+            .OrderByDescending(s => s.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        return snap?.StateJson;
+    }
+
+    private static async Task<string?> ResolveSceneProseForStateDeriveAsync(
+        ICreativeLongformDbContext db,
+        Scene scene,
+        CancellationToken cancellationToken)
+    {
+        var manuscript = scene.ManuscriptText?.Trim();
+        if (!string.IsNullOrEmpty(manuscript))
+            return manuscript;
+
+        var succeededRun = await db.GenerationRuns
+            .AsNoTracking()
+            .Where(r => r.SceneId == scene.Id && r.Status == GenerationRunStatus.Succeeded)
+            .OrderByDescending(r => r.CompletedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        var succeededDraft = succeededRun?.FinalDraftText?.Trim();
+        if (!string.IsNullOrEmpty(succeededDraft))
+            return succeededDraft;
+
+        var reviewRun = await db.GenerationRuns
+            .AsNoTracking()
+            .Where(r => r.SceneId == scene.Id && r.Status == GenerationRunStatus.AwaitingUserReview)
+            .OrderByDescending(r => r.StartedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        var reviewDraft = reviewRun?.FinalDraftText?.Trim();
+        if (!string.IsNullOrEmpty(reviewDraft))
+            return reviewDraft;
+
+        var latest = scene.LatestDraftText?.Trim();
+        return string.IsNullOrEmpty(latest) ? null : latest;
+    }
+
+    private static async Task<string> BuildWorldBlockForSceneAsync(
+        ICreativeLongformDbContext db,
+        Scene scene,
+        CancellationToken cancellationToken,
+        bool authorProseBeginningState = false)
+    {
+        var book = scene.Chapter.Book;
+        var worldElements = scene.SceneWorldElements.Select(swe => swe.WorldElement).ToList();
+        var worldElementIds = scene.SceneWorldElements.Select(swe => swe.WorldElementId).ToHashSet();
+        var scopedLinks = await LoadSceneScopedWorldElementLinksAsync(db, worldElementIds, cancellationToken);
+        return WorldContextBuilder.Build(book, worldElements, scopedLinks, authorProseBeginningState);
     }
 
     private async Task<string> ResolveBeginningStateAsync(
@@ -750,19 +980,13 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         await notifier.NotifyAsync(runId, "StepStarted", "BeginningState",
             "No author or prior-scene state — asking the pre-state model to infer pre-scene JSON.", cancellationToken,
             progress.ElapsedMs(), null, null);
-        return await GeneratePreStateAsync(db, ollama, preStateModel, run, scene, sameScenePrior, worldBlock, progress, cancellationToken);
+        return await GeneratePreStateAsync(db, ollama, preStateModel, LlmAuditContext.ForRun(runId), scene, sameScenePrior, worldBlock, progress, cancellationToken);
     }
 
     /// <summary>Prefer the run’s pre-state snapshot; if missing or empty, use author beginning-state JSON on the scene.</summary>
     private static string ResolveStateBeforeJsonForRun(string? preStateSnapshotJson, string? sceneBeginningStateJson)
     {
-        var fromRun = preStateSnapshotJson?.Trim();
-        if (!string.IsNullOrEmpty(fromRun) && fromRun != "{}")
-            return fromRun;
-        var author = sceneBeginningStateJson?.Trim();
-        if (!string.IsNullOrEmpty(author) && author != "{}")
-            return author;
-        return "{}";
+        return LlmJson.FirstUsableStateJson(preStateSnapshotJson, sceneBeginningStateJson) ?? "{}";
     }
 
     private static string SceneInstructionsForAgent(Scene scene)
@@ -780,11 +1004,11 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         ICreativeLongformDbContext db,
         IOllamaClient ollama,
         string model,
-        GenerationRun run,
+        LlmAuditContext audit,
         Scene scene,
         string? priorStateJson,
         string worldContextBlock,
-        PipelineProgress progress,
+        PipelineProgress? progress,
         CancellationToken cancellationToken)
     {
         var system =
@@ -817,10 +1041,280 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
             Produce pre-scene state only: before anything in the synopsis happens. Do not reflect events, injuries, or outcomes that the synopsis describes as occurring in this scene.
             """;
-        var (text, _, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.PreState, system, user, jsonFormat: true, chatOptions: null, cancellationToken: cancellationToken, progress,
+        var (text, _, _) = await ChatAndLogAsync(db, ollama, model, audit, PipelineStep.PreState, system, user, jsonFormat: true, CreateJsonStateOptions(), cancellationToken: cancellationToken, progress,
             "Infer beginning narrative state (JSON)");
         return LlmJson.StripMarkdownFences(text);
     }
+
+    private async Task<string> GeneratePreStateFromCurrentSceneAsync(
+        ICreativeLongformDbContext db,
+        IOllamaClient ollama,
+        string model,
+        LlmAuditContext audit,
+        Scene scene,
+        string? sceneProse,
+        string worldContextBlock,
+        PipelineProgress? progress,
+        CancellationToken cancellationToken)
+    {
+        var system =
+            """
+            You output ONLY valid JSON matching the narrative state snapshot. No markdown fences.
+            """
+            + NarrativeStateJsonSchemaPrompt
+            + FirstSceneBackwardInferenceRule
+            + PreSceneSynopsisBoundaryRule
+            + """
+            Fill concrete values at scene entry: environment, spatial layout, each on-stage character's pose, clothing, emotionalState, relativeToOthers, topOfMind, traitsShownNotTold.
+            """
+            + ShowDontTellEmphasis
+            + InventionScopeHardRule;
+        var proseBlock = string.IsNullOrWhiteSpace(sceneProse)
+            ? "Scene prose: (none yet — infer entry state from synopsis/instructions and linked world-building only)."
+            : $"""
+              Scene prose (draft or manuscript for THIS scene — read what changes during the text, then rewind to the opening instant before those changes):
+              {sceneProse.Trim()}
+              """;
+        var user = $"""
+            Scene title: {scene.Title}
+            Scene synopsis and instructions (events in this scene occur AFTER entry — use only to infer what state was before they happened):
+            {SceneInstructionsForAgent(scene)}
+            Narrative perspective (follow strictly): {scene.NarrativePerspective ?? "(infer from story tone if not specified)"}
+            Narrative tense (follow strictly): {scene.NarrativeTense ?? "(infer from story tone if not specified)"}
+            Prior scene end-state: (none — first scene or no prior handoff)
+
+            {proseBlock}
+
+            {worldContextBlock}
+
+            Produce pre-scene state JSON only: the instant before anything in the synopsis or prose happens.
+            """;
+        var (text, _, _) = await ChatAndLogAsync(db, ollama, model, audit, PipelineStep.PreState, system, user,
+            jsonFormat: true, CreateJsonStateOptions(), cancellationToken: cancellationToken, progress,
+            "Infer beginning state by working backward from scene brief");
+        return LlmJson.StripMarkdownFences(text);
+    }
+
+    private async Task<string> GeneratePreStateFromCurrentSceneSimplifiedAsync(
+        ICreativeLongformDbContext db,
+        IOllamaClient ollama,
+        string model,
+        LlmAuditContext audit,
+        Scene scene,
+        string? sceneProse,
+        string worldContextBlock,
+        bool jsonFormat,
+        PipelineProgress? progress,
+        CancellationToken cancellationToken)
+    {
+        var system =
+            """
+            Infer scene-opening narrative state JSON by working backward from the synopsis and optional prose below.
+            Output ONLY one JSON object with schemaVersion 1 and filled characters, spatial, environment fields.
+            Entry state is BEFORE any event described in the synopsis or prose. Never return {}.
+            """
+            + InventionScopeHardRule;
+        const string exampleShape =
+            """{"schemaVersion":1,"transitionSummary":"…","characters":[{"name":"…","location":"…","pose":"…","clothing":"…","emotionalState":"…","relativeToOthers":"…","topOfMind":["…"],"traitsShownNotTold":["…"]}],"spatial":{"layout":"…","proximity":"…"},"dialogue":{"topic":null,"unresolved":[]},"knowledge":{"povBeliefs":[],"omniscientFacts":[]},"environment":{"setting":"…","timeOfDay":"…","weather":"…","sensory":[]},"plotDevices":[]}""";
+        var proseLine = string.IsNullOrWhiteSpace(sceneProse)
+            ? "(no prose yet)"
+            : sceneProse.Trim();
+        var user = $"""
+            Scene: {scene.Title}
+            Synopsis/instructions: {SceneInstructionsForAgent(scene)}
+            Scene prose (optional — rewind to before changes in this text): {proseLine}
+
+            {worldContextBlock}
+
+            Example shape (fill with concrete entry-state values inferred backward from the brief):
+            {exampleShape}
+            """;
+        var progressLabel = jsonFormat
+            ? "Infer beginning state backward (simplified JSON mode)"
+            : "Infer beginning state backward (simplified prose JSON)";
+        var (text, _, _) = await ChatAndLogAsync(db, ollama, model, audit, PipelineStep.PreState, system, user,
+            jsonFormat, CreateJsonStateOptions(), cancellationToken: cancellationToken, progress, progressLabel);
+        return LlmJson.StripMarkdownFences(text);
+    }
+
+    private async Task<string> ResolveBeginningStateFromCurrentSceneAsync(
+        ICreativeLongformDbContext db,
+        IOllamaClient ollama,
+        string model,
+        LlmAuditContext audit,
+        Scene scene,
+        string? sceneProse,
+        string worldContextBlock,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var json = (await GeneratePreStateFromCurrentSceneAsync(db, ollama, model, audit, scene, sceneProse,
+                worldContextBlock, progress: null, cancellationToken)).Trim();
+            if (LlmJson.TryNormalizeStateJson(json, out var normalized))
+                return normalized;
+            if (attempt == 0)
+                _logger.LogWarning("Beginning state from current scene brief returned empty or invalid JSON; retrying.");
+        }
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var useJsonFormat = attempt == 0;
+            var json = (await GeneratePreStateFromCurrentSceneSimplifiedAsync(db, ollama, model, audit, scene,
+                sceneProse, worldContextBlock, useJsonFormat, progress: null, cancellationToken)).Trim();
+            if (LlmJson.TryNormalizeStateJson(json, out var normalized))
+                return normalized;
+            if (attempt == 0)
+                _logger.LogWarning("Beginning state backward simplified pass returned empty or invalid JSON; retrying without JSON mode.");
+        }
+
+        throw new InvalidOperationException(
+            "Could not infer beginning state from this scene's synopsis. " +
+            "Ensure Ollama is running and Settings → Ollama models has a pre-state model configured, " +
+            "or enter beginning state on the Prose or JSON tab.");
+    }
+
+    private async Task<string> ResolveBeginningStateFromProseAsync(
+        ICreativeLongformDbContext db,
+        IOllamaClient ollama,
+        string model,
+        LlmAuditContext audit,
+        Scene scene,
+        string authorProse,
+        string? priorStateJson,
+        string worldContextBlock,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var json = (await GeneratePreStateFromAuthorProseAsync(db, ollama, model, audit, scene, authorProse,
+                priorStateJson, worldContextBlock, progress: null, cancellationToken)).Trim();
+            if (LlmJson.TryNormalizeStateJson(json, out var normalized))
+                return normalized;
+            if (attempt == 0)
+                _logger.LogWarning("Beginning state from prose returned empty JSON; retrying full conversion.");
+        }
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var useJsonFormat = attempt == 0;
+            var json = (await GeneratePreStateFromAuthorProseSimplifiedAsync(db, ollama, model, audit, scene,
+                authorProse, priorStateJson, worldContextBlock, useJsonFormat, progress: null, cancellationToken)).Trim();
+            if (LlmJson.TryNormalizeStateJson(json, out var normalized))
+                return normalized;
+            if (attempt == 0)
+                _logger.LogWarning("Beginning state from prose simplified pass returned empty JSON; retrying without JSON mode.");
+        }
+
+        var fallback = LlmJson.FirstUsableStateJson(priorStateJson, scene.BeginningStateJson);
+        if (fallback is not null)
+        {
+            _logger.LogWarning(
+                "Beginning state from prose could not be converted; using continuity JSON fallback for scene {SceneId}.",
+                scene.Id);
+            return fallback;
+        }
+
+        throw new InvalidOperationException(
+            "Could not convert beginning-state prose to JSON — the pre-state model returned an empty object after several attempts. " +
+            "Confirm Ollama is running and Settings → Ollama models has a pre-state model set (or uses the writer model). " +
+            "You can edit the JSON tab directly, or use Regenerate with LLM on the JSON tab.");
+    }
+
+    private async Task<string> GeneratePreStateFromAuthorProseAsync(
+        ICreativeLongformDbContext db,
+        IOllamaClient ollama,
+        string model,
+        LlmAuditContext audit,
+        Scene scene,
+        string authorProse,
+        string? priorStateJson,
+        string worldContextBlock,
+        PipelineProgress? progress,
+        CancellationToken cancellationToken)
+    {
+        var system =
+            """
+            You convert the author's plain-language description of scene-opening narrative state into the canonical JSON snapshot schema. Output ONLY valid JSON. No markdown fences.
+            """
+            + NarrativeStateJsonSchemaPrompt
+            + AuthorProsePreStateBoundaryRule
+            + """
+            Fill concrete values in every applicable field from the author prose. Never return an empty JSON object.
+            """
+            + ShowDontTellEmphasis
+            + InventionScopeFromAuthorProseRule;
+        var user = $"""
+            Author beginning-state description (plain language — translate this into the JSON snapshot):
+            {authorProse}
+
+            Scene title (label only): {scene.Title}
+            Narrative perspective (follow strictly): {scene.NarrativePerspective ?? "(infer from author prose if not specified)"}
+            Narrative tense (follow strictly): {scene.NarrativeTense ?? "(infer from author prose if not specified)"}
+            Prior scene end-state JSON (continuity context only; may be empty): {priorStateJson ?? "{}"}
+
+            {worldContextBlock}
+
+            Produce pre-scene state JSON from the author prose only. Do not infer events from scene synopsis or instructions — they are intentionally omitted.
+            """;
+        var (text, _, _) = await ChatAndLogAsync(db, ollama, model, audit, PipelineStep.PreState, system, user,
+            jsonFormat: true, CreateJsonStateOptions(), cancellationToken: cancellationToken, progress,
+            "Convert author prose to beginning narrative state (JSON)");
+        return LlmJson.StripMarkdownFences(text);
+    }
+
+    private async Task<string> GeneratePreStateFromAuthorProseSimplifiedAsync(
+        ICreativeLongformDbContext db,
+        IOllamaClient ollama,
+        string model,
+        LlmAuditContext audit,
+        Scene scene,
+        string authorProse,
+        string? priorStateJson,
+        string worldContextBlock,
+        bool jsonFormat,
+        PipelineProgress? progress,
+        CancellationToken cancellationToken)
+    {
+        var system =
+            """
+            Convert the author's plain-language scene-opening description into narrative state JSON.
+            Output ONLY one JSON object matching schemaVersion 1 with characters, spatial, environment, dialogue, knowledge, and plotDevices arrays/objects filled from the prose.
+            Include every character named in the prose. Never return an empty object {}.
+            Scene synopsis and instructions are not provided — do not infer future scene beats.
+            """
+            + InventionScopeFromAuthorProseRule;
+        var priorJson = string.IsNullOrWhiteSpace(priorStateJson) ? "{}" : priorStateJson.Trim();
+        const string exampleShape =
+            """{"schemaVersion":1,"transitionSummary":"…","characters":[{"name":"…","location":"…","pose":"…","clothing":"…","emotionalState":"…","relativeToOthers":"…","topOfMind":["…"],"traitsShownNotTold":["…"]}],"spatial":{"layout":"…","proximity":"…"},"dialogue":{"topic":null,"unresolved":[]},"knowledge":{"povBeliefs":[],"omniscientFacts":[]},"environment":{"setting":"…","timeOfDay":"…","weather":"…","sensory":[]},"plotDevices":[]}""";
+        var user = $"""
+            Author prose (sole narrative source — translate into JSON fields):
+            {authorProse}
+
+            Scene title (label only): {scene.Title}
+            Prior scene end-state (continuity context only; may be empty): {priorJson}
+
+            {worldContextBlock}
+
+            Example shape (fill with concrete values from the author prose):
+            {exampleShape}
+            """;
+        var progressLabel = jsonFormat
+            ? "Convert author prose (simplified JSON mode)"
+            : "Convert author prose (simplified prose JSON)";
+        var (text, _, _) = await ChatAndLogAsync(db, ollama, model, audit, PipelineStep.PreState, system, user,
+            jsonFormat, CreateJsonStateOptions(), cancellationToken: cancellationToken, progress, progressLabel);
+        return LlmJson.StripMarkdownFences(text);
+    }
+
+    private OllamaChatOptions CreateJsonStateOptions() =>
+        new()
+        {
+            NumPredict = Math.Max(4096, _ollamaOptions.Value.DraftNumPredict),
+            RepeatPenalty = 1.05f,
+            RepeatLastN = 128,
+            Temperature = 0.15f
+        };
 
     private async Task<string> GenerateDraftAsync(
         ICreativeLongformDbContext db,
@@ -836,7 +1330,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         CancellationToken cancellationToken)
     {
         var numPredict = Math.Max(1024, _ollamaOptions.Value.DraftNumPredict);
-        var proseOptions = new OllamaChatOptions { NumPredict = numPredict };
+        var proseOptions = CreateDraftProseOptions(numPredict);
 
         var system =
             """
@@ -844,21 +1338,25 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             """
             + InventionScopeHardRule
             + ShowDontTellEmphasis
+            + BeginningStateContinuityForProseRule
             + """
-            Follow the scene synopsis, instructions, and the established narrative state.
+            Follow the scene synopsis and instructions; use the continuity anchor only for consistency (see above).
             Honor the requested narrative perspective and tense exactly.
             Write vivid prose; avoid naming character traits explicitly when a bio already labels them—show through action and detail.
             Respect story tone and linked world-building; do not invent facts that contradict them.
             Cast and world scope: only include or reference characters and world elements (people, places, factions, objects, lore)
             that appear under "Linked world-building" in the user message, or are explicitly named in the scene synopsis/instructions,
-            or appear in the state-before JSON. Do not name or reference characters or world elements from the book synopsis,
+            or appear in the continuity anchor. Do not name or reference characters or world elements from the book synopsis,
             book-level notes, or the wider story unless they are covered by those sources—avoid importing the broader cast or canon.
             Develop the scene with multiple paragraphs: setting, action, dialogue, and character interiority as fits the brief.
             Do not stop after a few sentences; this is a full scene beat, not a summary.
+            Never repeat the same sentence, paragraph, or story beat. If the synopsis is covered, end the scene — do not loop or pad.
             Output prose only, no preamble or title line.
             """;
+        var continuityBrief = NarrativeStateContinuityBriefBuilder.BuildForDraftPrompt(stateBeforeJson);
         var user = $"""
-            State before (JSON): {stateBeforeJson}
+            {continuityBrief}
+
             Scene synopsis and instructions:
             {SceneInstructionsForAgent(scene)}
             Narrative perspective: {scene.NarrativePerspective ?? "(infer from story)"}
@@ -869,9 +1367,9 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
             Write the complete scene. Target roughly {minWords}–{maxTargetWords} words for this session unless the brief explicitly demands a shorter piece.
             """;
-        var (text, _, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Draft, system, user, jsonFormat: false, proseOptions, cancellationToken: cancellationToken, progress,
+        var (text, _, _) = await ChatAndLogForRunAsync(db, ollama, model, run.Id, PipelineStep.Draft, system, user, jsonFormat: false, proseOptions, cancellationToken: cancellationToken, progress,
             "Write scene draft (prose)");
-        text = text.Trim();
+        text = GuardDraftProse(text, run.Id, "initial draft", stateBeforeJson);
 
         if (_ollamaOptions.Value.DraftExpandIfShort && CountWords(text) < minWords)
         {
@@ -884,30 +1382,57 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
                 """
                 + InventionScopeHardRule
                 + ShowDontTellEmphasis
+                + BeginningStateContinuityForProseRule
                 + """
+                Output ONLY the NEW paragraphs that should follow the draft in the user message.
+                Do NOT repeat, paraphrase, or recap any sentence from the existing draft. Do not include the draft text in your output.
                 Add substantive prose—new paragraphs, beats, dialogue, sensory detail—not repetition of the same lines.
                 Do not summarize the scene; extend it. Output prose only, no preamble.
                 Do not introduce new characters, relationships, or plot events that are not already in the draft or grounded in Linked world-building
                 and the scene synopsis/instructions in the user message.
+                Never loop or repeat the same beat; move the scene forward.
                 """;
             var expandUser = $"""
-                The draft below is too short for this novel scene. It must reach at least {minWords} words total.
+                The draft below is too short for this novel scene. It must reach at least {minWords} words total after your new paragraphs are appended.
                 Scene synopsis and instructions:
                 {SceneInstructionsForAgent(scene)}
                 Expected end notes (if any): {scene.ExpectedEndStateNotes ?? "(none)"}
 
                 {worldContextBlock}
 
-                Expand and continue from the end of the draft below (you may revise transitions so it reads as one scene):
+                Existing draft (do not repeat any of this in your output — write only what comes next):
                 {text}
                 """;
-            var (expanded, _, _) = await ChatAndLogAsync(
+            var (continuation, _, _) = await ChatAndLogForRunAsync(
                 db, ollama, model, run.Id, PipelineStep.Draft, expandSystem, expandUser, jsonFormat: false, proseOptions, cancellationToken: cancellationToken, progress,
                 "Expand short draft to target length");
-            text = expanded.Trim();
+            text = GuardDraftProse(DraftProseGuard.MergeDraftContinuation(text, continuation), run.Id, "expansion pass", stateBeforeJson);
         }
 
         return text;
+    }
+
+    private OllamaChatOptions CreateDraftProseOptions(int numPredict) =>
+        new()
+        {
+            NumPredict = numPredict,
+            RepeatPenalty = _ollamaOptions.Value.DraftRepeatPenalty,
+            RepeatLastN = _ollamaOptions.Value.DraftRepeatLastN
+        };
+
+    private string GuardDraftProse(string text, Guid runId, string stage, string? stateBeforeJson = null)
+    {
+        var guarded = DraftProseGuard.TrimRepetitiveLoops(text);
+        if (!string.IsNullOrWhiteSpace(stateBeforeJson))
+            guarded = DraftProseGuard.TrimOpeningStateRecitation(guarded, stateBeforeJson);
+        if (guarded.Length + 50 < text.Length)
+        {
+            _logger.LogWarning(
+                "Trimmed {RemovedChars} characters of repetitive prose from {Stage} for run {RunId}",
+                text.Length - guarded.Length, stage, runId);
+        }
+
+        return guarded;
     }
 
     private static int CountWords(string text)
@@ -921,7 +1446,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         ICreativeLongformDbContext db,
         IOllamaClient ollama,
         string model,
-        GenerationRun run,
+        LlmAuditContext audit,
         Scene scene,
         string stateBeforeJson,
         string draftText,
@@ -941,6 +1466,14 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             + """
             Grounding: scene prose + state at entry + linked world-building below. Do not invent named characters, relationships, or plot facts absent from those sources (same bar as beginning-state inference).
             """;
+        var entryStateBlock = LlmJson.IsEmptyJsonObject(stateBeforeJson)
+            ? """
+              State at scene ENTRY: (empty — no prior snapshot). Build the end snapshot entirely from scene prose and linked world-building below.
+              """
+            : $"""
+              State at scene ENTRY (JSON — same shape as beginning-state; baseline to merge forward from):
+              {stateBeforeJson}
+              """;
         var user = $"""
             Scene title: {scene.Title}
             Scene synopsis and instructions:
@@ -949,20 +1482,109 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             Narrative perspective (follow strictly): {scene.NarrativePerspective ?? "(infer from prose if not specified)"}
             Narrative tense (follow strictly): {scene.NarrativeTense ?? "(infer from prose if not specified)"}
 
-            State at scene ENTRY (JSON — same shape as beginning-state; baseline to merge forward from):
-            {stateBeforeJson}
+            {entryStateBlock}
 
             Scene prose (this scene only — read facts from this text into the end state; this block is not JSON):
             {draftText}
 
             {worldContextBlock}
 
-            Produce post-scene state only: infer the **end** snapshot in the **same format, field completeness, and concrete style** as you would for beginning-state at scene open — but every field must reflect the **last moment after** the prose above. Output JSON only.
+            Produce post-scene state only: infer the **end** snapshot in the **same format, field completeness, and concrete style** as you would for beginning-state at scene open — but every field must reflect the **last moment after** the prose above. Output JSON only. Never return an empty JSON object.
             """;
-        var postStatePredict = new OllamaChatOptions { NumPredict = Math.Max(2048, _ollamaOptions.Value.DraftNumPredict) };
-        var (text, _, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.PostState, system, user, jsonFormat: true, postStatePredict, cancellationToken: cancellationToken, progress,
+        var (text, _, _) = await ChatAndLogAsync(db, ollama, model, audit, PipelineStep.PostState, system, user, jsonFormat: true, CreateJsonStateOptions(), cancellationToken: cancellationToken, progress,
             "Derive post-scene narrative state (JSON, merged from pre-state)");
         return LlmJson.StripMarkdownFences(text);
+    }
+
+    private async Task<string> GeneratePostStateSimplifiedAsync(
+        ICreativeLongformDbContext db,
+        IOllamaClient ollama,
+        string model,
+        LlmAuditContext audit,
+        Scene scene,
+        string stateBeforeJson,
+        string draftText,
+        string worldContextBlock,
+        bool jsonFormat,
+        PipelineProgress? progress,
+        CancellationToken cancellationToken)
+    {
+        var system =
+            """
+            Derive end-of-scene narrative state JSON from the scene prose below.
+            Output ONLY one JSON object with schemaVersion 1 and filled characters, spatial, environment, dialogue, knowledge, and plotDevices fields.
+            Reflect facts at the LAST moment after the prose. Never return an empty object {}.
+            """
+            + InventionScopeHardRule;
+        var entryJson = LlmJson.FirstUsableStateJson(stateBeforeJson) ?? "{}";
+        const string exampleShape =
+            """{"schemaVersion":1,"transitionSummary":"…","characters":[{"name":"…","location":"…","pose":"…","clothing":"…","emotionalState":"…","relativeToOthers":"…","topOfMind":["…"],"traitsShownNotTold":["…"]}],"spatial":{"layout":"…","proximity":"…"},"dialogue":{"topic":null,"unresolved":[]},"knowledge":{"povBeliefs":[],"omniscientFacts":[]},"environment":{"setting":"…","timeOfDay":"…","weather":"…","sensory":[]},"plotDevices":[]}""";
+        var user = $"""
+            Scene title: {scene.Title}
+            State at scene entry (baseline to update): {entryJson}
+
+            Scene prose (read end-state facts from this text):
+            {draftText}
+
+            {worldContextBlock}
+
+            Example shape (fill with concrete values from the prose):
+            {exampleShape}
+            """;
+        var progressLabel = jsonFormat
+            ? "Derive post-scene state (simplified JSON mode)"
+            : "Derive post-scene state (simplified prose JSON)";
+        var (text, _, _) = await ChatAndLogAsync(db, ollama, model, audit, PipelineStep.PostState, system, user,
+            jsonFormat, CreateJsonStateOptions(), cancellationToken: cancellationToken, progress, progressLabel);
+        return LlmJson.StripMarkdownFences(text);
+    }
+
+    private async Task<string> ResolvePostStateJsonAsync(
+        ICreativeLongformDbContext db,
+        IOllamaClient ollama,
+        string model,
+        LlmAuditContext audit,
+        Scene scene,
+        string stateBeforeJson,
+        string draftText,
+        string worldContextBlock,
+        string? fallbackJson,
+        PipelineProgress? progress,
+        CancellationToken cancellationToken,
+        string stepLabel = "Post-state",
+        string? failureMessage = null)
+    {
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var json = (await GeneratePostStateAsync(db, ollama, model, audit, scene, stateBeforeJson, draftText,
+                worldContextBlock, progress, cancellationToken)).Trim();
+            if (LlmJson.TryNormalizeStateJson(json, out var normalized))
+                return normalized;
+            if (attempt == 0)
+                _logger.LogWarning("{Step} returned empty or invalid JSON; retrying full pass.", stepLabel);
+        }
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var useJsonFormat = attempt == 0;
+            var json = (await GeneratePostStateSimplifiedAsync(db, ollama, model, audit, scene, stateBeforeJson,
+                draftText, worldContextBlock, useJsonFormat, progress, cancellationToken)).Trim();
+            if (LlmJson.TryNormalizeStateJson(json, out var normalized))
+                return normalized;
+            if (attempt == 0)
+                _logger.LogWarning("{Step} simplified pass returned empty or invalid JSON; retrying without JSON mode.", stepLabel);
+        }
+
+        if (LlmJson.TryNormalizeStateJson(fallbackJson, out var fallbackNormalized))
+        {
+            _logger.LogWarning("{Step} could not be derived from the model; using stored preview or beginning-state fallback.", stepLabel);
+            return fallbackNormalized;
+        }
+
+        throw new InvalidOperationException(
+            failureMessage ??
+            $"{stepLabel} produced empty JSON and no usable preview or beginning-state fallback is available. " +
+            "Ensure Ollama is running and Settings → Ollama models has a post-state model configured.");
     }
 
     /// <summary>
@@ -1020,7 +1642,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         var textOrNull = await ChatJsonOrNullIfEmptyAfterRetryAsync(
             async () =>
             {
-                var (t, _, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.TransitionCheck, system, user,
+                var (t, _, _) = await ChatAndLogForRunAsync(db, ollama, model, run.Id, PipelineStep.TransitionCheck, system, user,
                     jsonFormat: true, transitionOptions, cancellationToken: cancellationToken, progress,
                     "Continuity check (before / prose / after)");
                 return t;
@@ -1084,7 +1706,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         var textOrNull = await ChatJsonOrNullIfEmptyAfterRetryAsync(
             async () =>
             {
-                var (t, _, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Compliance, system, user,
+                var (t, _, _) = await ChatAndLogForRunAsync(db, ollama, model, run.Id, PipelineStep.Compliance, system, user,
                     jsonFormat: true, complianceOptions, cancellationToken: cancellationToken, progress,
                     "Instruction compliance check");
                 return t;
@@ -1132,6 +1754,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             + InventionScopeHardRule
             + """
             Lower the score for prose that smuggles in new named characters, relationships, or plot events not grounded in the scene synopsis/instructions, expected end notes, state-before JSON, and linked world-building — not merely because the book-level synopsis elsewhere mentions different characters or future plot.
+            Lower the score when the opening paragraphs read like a restated state-table inventory (pose, clothing, mood labels, blocking) instead of dramatized action or dialogue.
             Plot beats and facts that appear in the scene synopsis, instructions, expected end notes, or state-before JSON are authorized; do not treat them as inventions.
             fixInstructions: targeted craft rewrites only; preserve plot and compliance; do not suggest adding new characters or events outside scope; never sanitize for propriety.
             """;
@@ -1151,7 +1774,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         var textOrNull = await ChatJsonOrNullIfEmptyAfterRetryAsync(
             async () =>
             {
-                var (t, _, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Quality, system, user,
+                var (t, _, _) = await ChatAndLogForRunAsync(db, ollama, model, run.Id, PipelineStep.Quality, system, user,
                     jsonFormat: true, qualityOptions, cancellationToken: cancellationToken, progress,
                     "Prose quality critique");
                 return t;
@@ -1242,9 +1865,10 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         CancellationToken cancellationToken,
         PipelineProgress? progress = null)
     {
-        var proseOptions = new OllamaChatOptions { NumPredict = Math.Max(1024, _ollamaOptions.Value.DraftNumPredict) };
+        var proseOptions = CreateDraftProseOptions(Math.Max(1024, _ollamaOptions.Value.DraftNumPredict));
         var perspective = scene.NarrativePerspective ?? "(infer from story tone if not specified)";
         var tense = scene.NarrativeTense ?? "(infer from story tone if not specified)";
+        var continuityBrief = NarrativeStateContinuityBriefBuilder.BuildForDraftPrompt(stateBeforeJson);
         var sceneBlock = $"""
             Narrative perspective (follow strictly): {perspective}
             Narrative tense (follow strictly): {tense}
@@ -1252,7 +1876,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             Scene synopsis and instructions:
             {SceneInstructionsForAgent(scene)}
             Expected end notes (if any): {scene.ExpectedEndStateNotes ?? "(none)"}
-            State before (JSON): {stateBeforeJson}
+            {continuityBrief}
             """;
 
         if (selectionStart is int start && selectionEnd is int end && end > start)
@@ -1264,6 +1888,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
                 """
                 + InventionScopeHardRule
                 + ShowDontTellEmphasis
+                + BeginningStateContinuityForProseRule
                 + """
                 OUTPUT FORMAT — output ONLY valid JSON: {"replacement":"..."}. The "replacement" string is the new prose for the selected passage only (not the whole scene). Match voice, tense, and perspective of the surrounding draft. No markdown fences, no extra keys, no explanation.
                 """;
@@ -1287,7 +1912,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
                 {worldContextBlock}
                 """;
-            var (text, _, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Repair, system, user,
+            var (text, _, _) = await ChatAndLogForRunAsync(db, ollama, model, run.Id, PipelineStep.Repair, system, user,
                 jsonFormat: true, proseOptions, cancellationToken: cancellationToken, progress,
                 "Correct draft (selection replacement JSON)");
             var parsed = LlmJson.Deserialize<DraftReplacementJson>(text)
@@ -1302,6 +1927,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             """
             + InventionScopeHardRule
             + ShowDontTellEmphasis
+            + BeginningStateContinuityForProseRule
             + """
             Output prose only, no preamble.
             """;
@@ -1316,7 +1942,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
             {worldContextBlock}
             """;
-        var (textFull, _, _) = await ChatAndLogAsync(db, ollama, model, run.Id, PipelineStep.Repair, systemFull, userFull,
+        var (textFull, _, _) = await ChatAndLogForRunAsync(db, ollama, model, run.Id, PipelineStep.Repair, systemFull, userFull,
             jsonFormat: false, proseOptions, cancellationToken: cancellationToken, progress,
             "Correct draft (full revision)");
         return textFull.Trim();
@@ -1365,6 +1991,51 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         return sb.ToString();
     }
 
+    private async Task<string> EnsureUsableStateJsonAsync(
+        Func<Task<string>> generateOnce,
+        string? fallbackJson,
+        string stepLabel,
+        CancellationToken cancellationToken,
+        string? failureMessage = null)
+    {
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var json = (await generateOnce()).Trim();
+            if (LlmJson.TryNormalizeStateJson(json, out var normalized))
+                return normalized;
+            if (attempt == 0)
+                _logger.LogWarning("{Step} returned empty or invalid JSON; retrying once.", stepLabel);
+        }
+
+        var fallback = fallbackJson?.Trim();
+        if (LlmJson.TryNormalizeStateJson(fallback, out var fallbackNormalized))
+        {
+            _logger.LogWarning("{Step} returned invalid JSON after retry; using continuity fallback.", stepLabel);
+            return fallbackNormalized;
+        }
+
+        throw new InvalidOperationException(
+            failureMessage ??
+            $"{stepLabel} produced empty JSON and no usable continuity fallback is available. " +
+            "Ensure Ollama is running and Settings → Ollama models has a pre-state model configured.");
+    }
+
+    private static async Task<string?> ResolvePostStateFallbackAsync(
+        ICreativeLongformDbContext db,
+        Guid generationRunId,
+        Scene scene,
+        string? stateBeforeJson,
+        CancellationToken cancellationToken)
+    {
+        var runSnapshot = await db.StateSnapshots.AsNoTracking()
+            .Where(s => s.GenerationRunId == generationRunId && s.Step == PipelineStep.PostState)
+            .OrderByDescending(s => s.CreatedAt)
+            .Select(s => s.StateJson)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return LlmJson.FirstUsableStateJson(scene.PendingPostStateJson, runSnapshot, stateBeforeJson);
+    }
+
     private async Task SaveSnapshotAsync(
         ICreativeLongformDbContext db,
         Guid runId,
@@ -1388,7 +2059,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         ICreativeLongformDbContext db,
         IOllamaClient ollama,
         string model,
-        Guid runId,
+        LlmAuditContext audit,
         PipelineStep step,
         string system,
         string user,
@@ -1398,6 +2069,9 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         PipelineProgress? progress = null,
         string? progressSummary = null)
     {
+        if (audit.GenerationRunId is null && audit.BookId is null)
+            throw new ArgumentException("Either GenerationRunId or BookId is required for LLM audit logging.");
+
         var messages = new List<OllamaChatMessage>
         {
             new("system", system),
@@ -1417,8 +2091,8 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         await db.LlmCalls.AddAsync(new LlmCall
         {
             Id = llmCallId,
-            GenerationRunId = runId,
-            BookId = null,
+            GenerationRunId = audit.GenerationRunId,
+            BookId = audit.BookId,
             Step = step,
             Model = model,
             RequestJson = req,
@@ -1426,10 +2100,10 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             CreatedAt = DateTimeOffset.UtcNow
         }, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
-        if (progress != null)
+        if (progress is not null && audit.GenerationRunId is Guid progressRunId)
         {
             var label = progressSummary ?? step.ToString();
-            await progress.Notifier.NotifyAsync(runId, "LlmRoundtrip", step.ToString(),
+            await progress.Notifier.NotifyAsync(progressRunId, "LlmRoundtrip", step.ToString(),
                 $"{label}: model «{model}» returned {result.MessageText.Length:N0} characters in {roundSw.ElapsedMilliseconds} ms.",
                 cancellationToken,
                 progress.ElapsedMs(),
@@ -1439,4 +2113,20 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
         return (result.MessageText, result.MessageText, llmCallId);
     }
+
+    private async Task<(string messageText, string rawResponse, Guid llmCallId)> ChatAndLogForRunAsync(
+        ICreativeLongformDbContext db,
+        IOllamaClient ollama,
+        string model,
+        Guid runId,
+        PipelineStep step,
+        string system,
+        string user,
+        bool jsonFormat,
+        OllamaChatOptions? chatOptions = null,
+        CancellationToken cancellationToken = default,
+        PipelineProgress? progress = null,
+        string? progressSummary = null)
+        => await ChatAndLogAsync(db, ollama, model, LlmAuditContext.ForRun(runId), step, system, user, jsonFormat,
+            chatOptions, cancellationToken, progress, progressSummary);
 }

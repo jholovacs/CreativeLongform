@@ -20,4 +20,15 @@ public interface IGenerationOrchestrator
     Task<CorrectDraftResult> CorrectDraftAsync(Guid sceneId, Guid generationRunId, string userInstruction,
         string? currentDraftText = null, int? selectionStart = null, int? selectionEnd = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Derives beginning narrative state JSON for <paramref name="sceneId"/> via LLM, persists it on the scene, and returns it.
+    /// When a previous scene exists, runs that scene's prose and beginning state through post-state inference, then pre-state for this scene.
+    /// </summary>
+    Task<DeriveBeginningStateResult> DeriveBeginningStateAsync(Guid sceneId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Converts author plain-language beginning-state prose into schema JSON and persists both on the scene.</summary>
+    Task<ConvertBeginningStateFromProseResult> ConvertBeginningStateFromProseAsync(Guid sceneId, string authorProse,
+        CancellationToken cancellationToken = default);
 }

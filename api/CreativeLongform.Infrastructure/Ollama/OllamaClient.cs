@@ -46,8 +46,20 @@ public sealed class OllamaClient : IOllamaClient
         };
         if (jsonFormat)
             payload["format"] = "json";
-        if (options?.NumPredict is { } n)
-            payload["options"] = new Dictionary<string, object?> { ["num_predict"] = n };
+        if (options is not null)
+        {
+            var ollamaOpts = new Dictionary<string, object?>();
+            if (options.NumPredict is { } n)
+                ollamaOpts["num_predict"] = n;
+            if (options.RepeatPenalty is { } rp)
+                ollamaOpts["repeat_penalty"] = rp;
+            if (options.RepeatLastN is { } rln)
+                ollamaOpts["repeat_last_n"] = rln;
+            if (options.Temperature is { } temp)
+                ollamaOpts["temperature"] = temp;
+            if (ollamaOpts.Count > 0)
+                payload["options"] = ollamaOpts;
+        }
 
         using var response = await _http.PostAsJsonAsync("chat", payload, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound)

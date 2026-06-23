@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 
 namespace CreativeLongform.Application.Generation;
@@ -27,8 +28,79 @@ public static class LlmJson
         }
     }
 
+    /// <summary>Returns the first non-empty JSON object among candidates, or null.</summary>
+    public static string? FirstUsableStateJson(params string?[] candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (TryNormalizeStateJson(candidate, out var normalized))
+                return normalized;
+        }
+
+        return null;
+    }
+
     /// <summary>
-    /// Parses compliance JSON. Empty <c>{}</c> deserializes with <c>pass: false</c> by default — we treat missing/empty
+    /// Parses narrative state JSON from LLM output (markdown fences, leading prose) and returns compact JSON for jsonb storage.
+    /// </summary>
+    public static bool TryNormalizeStateJson(string? text, out string normalized)
+    {
+        normalized = string.Empty;
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        var cleaned = StripMarkdownFences(text).Trim();
+        cleaned = ExtractJsonObject(cleaned);
+        if (string.IsNullOrWhiteSpace(cleaned))
+            return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(cleaned);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return false;
+            if (!doc.RootElement.EnumerateObject().Any())
+                return false;
+            normalized = JsonSerializer.Serialize(doc.RootElement, JsonOptions.Default);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    public static string NormalizeStateJsonOrThrow(string text, string context)
+    {
+        if (TryNormalizeStateJson(text, out var normalized))
+            return normalized;
+        throw new InvalidOperationException($"{context} was not valid JSON.");
+    }
+
+    private static string ExtractJsonObject(string text)
+    {
+        var start = text.IndexOf('{');
+        if (start < 0)
+            return text;
+
+        var depth = 0;
+        for (var i = start; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (c == '{')
+                depth++;
+            else if (c == '}')
+            {
+                depth--;
+                if (depth == 0)
+                    return text[start..(i + 1)];
+            }
+        }
+
+        return text[start..];
+    }
+
+    /// <summary>Parses compliance JSON. Empty <c>{}</c> deserializes with <c>pass: false</c> by default — we treat missing/empty
     /// payloads as pass with no violations unless issues are listed without <c>pass</c>.
     /// Prefer <see cref="IsEmptyJsonObject"/> + retry at the call site before relying on this for <c>{}</c>.
     /// </summary>

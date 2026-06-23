@@ -69,6 +69,33 @@ public class LlmJsonTests
         Assert.False(LlmJson.IsEmptyJsonObject("""{"pass":true}"""));
     }
 
+    [Fact]
+    public void FirstUsableStateJson_skips_empty_and_returns_first_object()
+    {
+        Assert.Null(LlmJson.FirstUsableStateJson(null, "{}", "  "));
+        Assert.Equal("""{"ok":true}""", LlmJson.FirstUsableStateJson("{}", """{"ok":true}"""));
+    }
+
+    [Fact]
+    public void TryNormalizeStateJson_extracts_object_from_preamble_and_fences()
+    {
+        const string raw = """
+            Here is the state:
+            ```json
+            {"schemaVersion":1,"environment":{"setting":"Harbor office"}}
+            ```
+            """;
+        Assert.True(LlmJson.TryNormalizeStateJson(raw, out var normalized));
+        Assert.Contains("Harbor office", normalized);
+    }
+
+    [Fact]
+    public void TryNormalizeStateJson_rejects_invalid_text()
+    {
+        Assert.False(LlmJson.TryNormalizeStateJson("not json at all", out _));
+        Assert.False(LlmJson.TryNormalizeStateJson("{}", out _));
+    }
+
     /// <summary>
     /// <para><b>System under test:</b> <see cref="LlmJson.DeserializeComplianceVerdict"/>.</para>
     /// <para><b>Test case:</b> Model returns <c>{}</c> with no <c>pass</c> field.</para>

@@ -19,6 +19,15 @@ public sealed record OllamaChatOptions
 {
     /// <summary>Max tokens to generate (Ollama num_predict).</summary>
     public int? NumPredict { get; init; }
+
+    /// <summary>Ollama repeat_penalty (typical 1.0–1.2; higher discourages token loops).</summary>
+    public float? RepeatPenalty { get; init; }
+
+    /// <summary>Ollama repeat_last_n — window of recent tokens penalized for repetition.</summary>
+    public int? RepeatLastN { get; init; }
+
+    /// <summary>Ollama temperature (lower values for structured JSON).</summary>
+    public float? Temperature { get; init; }
 }
 
 public sealed record OllamaChatResult(string Model, string MessageText);

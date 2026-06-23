@@ -11,6 +11,7 @@ import {
 } from '../core/draft-paragraph';
 import { ParsedComplianceVerdict, parseComplianceVerdictJson } from '../core/compliance-verdict-parse';
 import { formatJsonPretty } from '../core/json-format';
+import { splitLlmThinkingFromProse } from '../core/llm-prose-sanitize';
 import { Book, Chapter, ComplianceEvaluation, Scene } from '../models/entities';
 import { CorrectDraftResponse, GenerationService } from '../services/generation.service';
 import { ODataService } from '../services/odata.service';
@@ -72,6 +73,7 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
   draftReviewNotes: Array<{ step: string; detail: string }> = [];
 
   draftText = '';
+  llmThinkingNotes = '';
   correctInstruction = '';
   lastStateTableJson: string | null = null;
 
@@ -187,7 +189,14 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
   }
 
   private syncFormFromScene(s: Scene): void {
-    this.draftText = s.latestDraftText ?? '';
+    const split = splitLlmThinkingFromProse(s.latestDraftText ?? '');
+    this.draftText = split.prose;
+    const storedNotes = s.llmThinkingNotes?.trim() ?? '';
+    const legacyNotes = split.thinkingNotes?.trim() ?? '';
+    this.llmThinkingNotes =
+      storedNotes && legacyNotes
+        ? `${storedNotes}\n\n---\n\n${legacyNotes}`
+        : storedNotes || legacyNotes;
     this.pendingPostStateRaw = s.pendingPostStateJson ?? null;
     const endRaw = s.pendingPostStateJson ?? s.approvedStateTableJson ?? null;
     this.lastStateTableJson = endRaw ? formatJsonPretty(endRaw) : null;
@@ -415,8 +424,13 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
           const nextId = res.nextSceneId ?? this.sceneId;
           void this.router.navigate(['/scenes'], { queryParams: { sceneId: nextId } });
         },
-        error: () => {
+        error: (err: { error?: string | { message?: string } }) => {
           this.busy = false;
+          const body = err.error;
+          this.error =
+            typeof body === 'string'
+              ? body
+              : (body?.message ?? 'Could not finalize the draft. Ensure Ollama is running and try again.');
         }
       });
   }
@@ -516,6 +530,9 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
       next: (res: CorrectDraftResponse) => {
         this.correctInstruction = '';
         this.draftText = res.correctedDraftText;
+        if (res.llmThinkingNotes?.trim()) {
+          this.llmThinkingNotes = res.llmThinkingNotes.trim();
+        }
         this.correctModalProposedText = res.correctedDraftText;
         this.correctModalEditedText = res.correctedDraftText;
         this.pendingPostStateRaw = res.pendingPostStateJson ?? null;

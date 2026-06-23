@@ -34,6 +34,17 @@ export interface SceneWorkflowContext {
   defaultNarrativeTense: string | null;
 }
 
+/** POST /api/scenes/{id}/beginning-state/derive response. */
+export interface DeriveBeginningStateResult {
+  beginningStateJson: string;
+  derivedFromPreviousScene: boolean;
+}
+
+/** POST /api/scenes/{id}/beginning-state/convert-from-prose response. */
+export interface ConvertBeginningStateFromProseResult {
+  beginningStateJson: string;
+}
+
 @Injectable({ providedIn: 'root' })
 export class SceneWorkflowService {
   private readonly http = inject(HttpClient);
@@ -48,6 +59,7 @@ export class SceneWorkflowService {
       narrativePerspective: string | null;
       narrativeTense: string | null;
       beginningStateJson: string | null;
+      beginningStateProse: string | null;
       latestDraftText: string;
       pendingPostStateJson: string | null;
       clearPendingPostState: boolean;
@@ -60,6 +72,24 @@ export class SceneWorkflowService {
 
   getWorkflowContext(sceneId: string) {
     return this.http.get<SceneWorkflowContext>(`${apiBaseUrl}/api/scenes/${sceneId}/workflow-context`);
+  }
+
+  /** LLM-derive beginning state JSON, persist on the scene, and return it. */
+  deriveBeginningState(sceneId: string) {
+    return this.http.post<DeriveBeginningStateResult>(`${apiBaseUrl}/api/scenes/${sceneId}/beginning-state/derive`, {});
+  }
+
+  /** LLM-convert plain-language beginning-state prose into schema JSON and persist on the scene. */
+  convertBeginningStateFromProse(sceneId: string, prose: string) {
+    return this.http.post<ConvertBeginningStateFromProseResult>(
+      `${apiBaseUrl}/api/scenes/${sceneId}/beginning-state/convert-from-prose`,
+      { prose }
+    );
+  }
+
+  /** Remove finalized manuscript and approved end-state so the scene can be rewritten. */
+  clearSceneManuscript(sceneId: string) {
+    return this.http.post(`${apiBaseUrl}/api/scenes/${sceneId}/manuscript/clear`, {});
   }
 
   suggestWorldElements(bookId: string, synopsis: string) {

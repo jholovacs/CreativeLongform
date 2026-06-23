@@ -15,7 +15,8 @@ public static class WorldContextBuilder
     public static string Build(
         Book book,
         IReadOnlyList<WorldElement> elements,
-        IReadOnlyList<WorldElementLink>? scopedLinks = null)
+        IReadOnlyList<WorldElementLink>? scopedLinks = null,
+        bool authorProseBeginningState = false)
     {
         var sb = new StringBuilder();
         var measurementBlock = MeasurementPromptFormatter.Format(book);
@@ -38,9 +39,12 @@ public static class WorldContextBuilder
             sb.AppendLine();
             sb.AppendLine("Linked world-building — no world elements are linked to this scene.");
             sb.AppendLine(
-                "Only reference characters, places, and lore named in the scene synopsis/instructions above or in the state-before JSON; " +
-                "do not import the broader cast from the book synopsis alone unless the scene text explicitly names them.");
-            AppendInventionScopeFooter(sb);
+                authorProseBeginningState
+                    ? "Only reference characters, places, and lore named in the author beginning-state prose or prior scene end-state JSON; " +
+                      "do not import cast or events from scene synopsis (not supplied here) or the book synopsis alone unless the author prose explicitly names them."
+                    : "Only reference characters, places, and lore named in the scene synopsis/instructions above or in the state-before JSON; " +
+                      "do not import the broader cast from the book synopsis alone unless the scene text explicitly names them.");
+            AppendInventionScopeFooter(sb, authorProseBeginningState);
             return sb.ToString().TrimEnd();
         }
 
@@ -88,17 +92,21 @@ public static class WorldContextBuilder
             }
         }
 
-        AppendInventionScopeFooter(sb);
+        AppendInventionScopeFooter(sb, authorProseBeginningState);
         return sb.ToString().TrimEnd();
     }
 
-    private static void AppendInventionScopeFooter(StringBuilder sb)
+    private static void AppendInventionScopeFooter(StringBuilder sb, bool authorProseBeginningState)
     {
         sb.AppendLine();
         sb.AppendLine(
-            "Authoritative scope for this scene: Do not invent named characters, relationships between entities, or plot events " +
-            "except as required by the scene synopsis/instructions above and the linked elements and relationship lines in this section. " +
-            "Book-level synopsis and tone (elsewhere in this message) are not permission to add unrelated people, events, or lore.");
+            authorProseBeginningState
+                ? "Authoritative scope for this conversion: Do not invent named characters, relationships between entities, or plot events " +
+                  "except as required by the author beginning-state prose and the linked elements and relationship lines in this section. " +
+                  "Scene synopsis and instructions are intentionally omitted — do not infer future beats from book-level synopsis or tone notes."
+                : "Authoritative scope for this scene: Do not invent named characters, relationships between entities, or plot events " +
+                  "except as required by the scene synopsis/instructions above and the linked elements and relationship lines in this section. " +
+                  "Book-level synopsis and tone (elsewhere in this message) are not permission to add unrelated people, events, or lore.");
         sb.AppendLine(
             "Prose using this material should show, don't tell: dramatize through action, dialogue, and concrete detail rather than abstract exposition or emotional labeling.");
     }

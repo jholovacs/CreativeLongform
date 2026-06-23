@@ -143,9 +143,63 @@
           <div class="collapsible-inner">
             <p class="hint" [title]="fieldHelp.manuscriptPanel">
               Accepted prose from your last finalize for this scene. It remains visible when you switch scenes or generate a new
-              draft here.
+              draft here. Clear it to discard the finalized version and rewrite from a new generation run.
             </p>
             <pre class="manuscript-body">{{ sceneManuscript }}</pre>
+            <div class="manuscript-actions">
+              <button
+                type="button"
+                class="secondary btn-with-icon"
+                (click)="clearSceneManuscript()"
+                [disabled]="busy || clearManuscriptBusy"
+                [title]="fieldHelp.clearSceneManuscript"
+              >
+                <app-ui-icon name="trash" />
+                Clear finalized manuscript
+              </button>
+            </div>
+          </div>
+        </details>
+      }
+
+      @if (sceneLlmThinkingNotes) {
+        <details
+          class="panel collapsible llm-thinking-panel"
+          [open]="panelOpen.llmThinkingNotes"
+          (toggle)="onPanelToggle('llmThinkingNotes', $event)"
+        >
+          <summary>
+            <span class="sum-title">Model thinking notes</span>
+            <span class="sum-preview">{{ llmThinkingNotesSummary }}</span>
+            <span class="panel-sum-actions">
+              <button
+                type="button"
+                class="btn-icon"
+                title="Expand section"
+                (click)="expandPanel('llmThinkingNotes', $event)"
+                [disabled]="panelOpen.llmThinkingNotes"
+              >
+                <app-ui-icon name="chevron-down" />
+                <span class="sr-only">Expand section</span>
+              </button>
+              <button
+                type="button"
+                class="btn-icon"
+                title="Collapse section"
+                (click)="collapsePanel('llmThinkingNotes', $event)"
+                [disabled]="!panelOpen.llmThinkingNotes"
+              >
+                <app-ui-icon name="chevron-up" />
+                <span class="sr-only">Collapse section</span>
+              </button>
+            </span>
+          </summary>
+          <div class="collapsible-inner">
+            <p class="hint" [title]="fieldHelp.llmThinkingNotesPanel">
+              Reasoning extracted from model output (e.g. <code>&lt;thinking&gt;</code> blocks). Not included in draft or
+              manuscript text.
+            </p>
+            <pre class="llm-thinking-body">{{ sceneLlmThinkingNotes }}</pre>
           </div>
         </details>
       }
@@ -295,24 +349,90 @@
         </summary>
         <div class="collapsible-inner">
           <p class="hint">
-            If there is a previous scene with a finalized run, the prior end-state is suggested. Override with your own JSON if
-            needed. The table tracks place, environment, spatial layout, who is on stage, pose, dress, mood, relative positions,
-            and salient topics for the next scene.
+            By default, when this scene has no saved beginning state, the previous scene’s end-state JSON is loaded on the JSON
+            tab (after finalize). You can also describe the opening in plain language on the Prose tab and convert it to JSON. Save
+            Scene or Generate persists the values used for draft prose.
           </p>
-          <label for="begin-json">Beginning State JSON</label>
-          <textarea
-            id="begin-json"
-            class="state-json-textarea"
-            rows="6"
-            [(ngModel)]="beginningStateJson"
-            [disabled]="busy"
-            placeholder="{}"
-            [title]="fieldHelp.beginningStateJson"
-          ></textarea>
-          <button type="button" class="primary btn-with-icon" (click)="saveSceneFields()" [disabled]="busy || worldBusy">
-            <app-ui-icon name="save" />
-            Save Scene
-          </button>
+          <div class="state-tabs" role="tablist" aria-label="Beginning state editor">
+            <button
+              type="button"
+              role="tab"
+              class="state-tab"
+              [class.state-tab--active]="beginningStateTab === 'json'"
+              [attr.aria-selected]="beginningStateTab === 'json'"
+              (click)="beginningStateTab = 'json'"
+            >
+              JSON
+            </button>
+            <button
+              type="button"
+              role="tab"
+              class="state-tab"
+              [class.state-tab--active]="beginningStateTab === 'prose'"
+              [attr.aria-selected]="beginningStateTab === 'prose'"
+              (click)="beginningStateTab = 'prose'"
+            >
+              Prose description
+            </button>
+          </div>
+          @if (beginningStateTab === 'json') {
+            <label for="begin-json">Beginning State JSON</label>
+            <textarea
+              id="begin-json"
+              class="state-json-textarea"
+              rows="6"
+              [(ngModel)]="beginningStateJson"
+              [disabled]="busy || beginningStateLlmBusy"
+              placeholder="{}"
+              [title]="fieldHelp.beginningStateJson"
+            ></textarea>
+          } @else {
+            <label for="begin-prose">Beginning state (plain language)</label>
+            <textarea
+              id="begin-prose"
+              class="state-prose-textarea"
+              rows="8"
+              [(ngModel)]="beginningStateProse"
+              [disabled]="busy || beginningStateLlmBusy"
+              placeholder="Example: Mara is alone in the harbor office at dusk. Rain on the windows. She still believes the letter is genuine…"
+              [title]="fieldHelp.beginningStateProse"
+            ></textarea>
+          }
+          <div class="beginning-state-actions">
+            @if (beginningStateTab === 'prose') {
+              <button
+                type="button"
+                class="secondary btn-with-icon"
+                (click)="convertBeginningStateFromProse()"
+                [disabled]="busy || worldBusy || beginningStateLlmBusy || !selectedSceneId || !beginningStateProse.trim()"
+                [title]="fieldHelp.convertBeginningStateFromProse"
+              >
+                <app-ui-icon name="sparkles" />
+                Convert to JSON with LLM
+              </button>
+            } @else {
+              <button
+                type="button"
+                class="secondary btn-with-icon"
+                (click)="deriveBeginningState()"
+                [disabled]="busy || worldBusy || beginningStateLlmBusy || !selectedSceneId"
+                [title]="fieldHelp.deriveBeginningState"
+              >
+                <app-ui-icon name="sparkles" />
+                Regenerate with LLM
+              </button>
+            }
+            <button type="button" class="primary btn-with-icon" (click)="saveSceneFields()" [disabled]="busy || worldBusy || beginningStateLlmBusy">
+              <app-ui-icon name="save" />
+              Save Scene
+            </button>
+          </div>
+          @if (beginningStateLlmBusy) {
+            <app-llm-working-indicator
+              [visible]="true"
+              [label]="convertBeginningStateFromProseBusy ? 'Converting prose to JSON…' : 'Deriving beginning state…'"
+            />
+          }
         </div>
       </details>
 

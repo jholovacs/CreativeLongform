@@ -38,6 +38,12 @@ public sealed class OllamaOptions
     /// <summary>Ollama num_predict for draft and repair steps (raise if output truncates).</summary>
     public int DraftNumPredict { get; set; } = 8192;
 
+    /// <summary>Ollama repeat_penalty for draft/repair prose (helps prevent token loops).</summary>
+    public float DraftRepeatPenalty { get; set; } = 1.12f;
+
+    /// <summary>Ollama repeat_last_n for draft/repair prose.</summary>
+    public int DraftRepeatLastN { get; set; } = 256;
+
     /// <summary>If the first draft is shorter than DraftMinWords, run one expansion pass.</summary>
     public bool DraftExpandIfShort { get; set; } = true;
 

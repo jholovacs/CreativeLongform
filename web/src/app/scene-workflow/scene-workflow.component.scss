@@ -251,10 +251,61 @@
     color: var(--text);
   }
 
+  .llm-thinking-panel .llm-thinking-body {
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 20rem;
+    overflow: auto;
+    margin: 0;
+    padding: 0.75rem;
+    background: var(--input-bg);
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    color: var(--muted, var(--text));
+  }
+
   .state-json-textarea {
     font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
     font-size: 0.85rem;
     line-height: 1.45;
+  }
+
+  .state-prose-textarea {
+    font-family: inherit;
+    font-size: 0.95rem;
+    line-height: 1.55;
+  }
+
+  .state-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin: 0.75rem 0 0.5rem;
+  }
+
+  .state-tab {
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--input-bg);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 0.35rem 0.75rem;
+    font: inherit;
+    cursor: pointer;
+
+    &.state-tab--active {
+      border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+      background: color-mix(in srgb, var(--accent) 12%, var(--input-bg));
+      font-weight: 600;
+    }
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
   }
 
   .quality-thresholds {
@@ -285,7 +336,9 @@
     }
   }
 
-  .generate-actions {
+  .generate-actions,
+  .beginning-state-actions,
+  .manuscript-actions {
     display: flex;
     flex-wrap: wrap;
     align-items: center;

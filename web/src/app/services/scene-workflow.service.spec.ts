@@ -56,6 +56,46 @@ describe('SceneWorkflowService', () => {
   });
 
   /**
+   * System under test: {@link SceneWorkflowService.deriveBeginningState}
+   * Test case: POST derive endpoint for a scene.
+   * Expected result: URL matches API and body is empty object.
+   */
+  it('deriveBeginningState POSTs to derive endpoint', () => {
+    const sceneId = '880e8400-e29b-41d4-a716-446655440003';
+    service.deriveBeginningState(sceneId).subscribe();
+    const req = httpMock.expectOne(
+      (r) => r.method === 'POST' && r.url.endsWith(`/api/scenes/${sceneId}/beginning-state/derive`)
+    );
+    expect(req.request.body).toEqual({});
+    req.flush({ beginningStateJson: '{}', derivedFromPreviousScene: false });
+  });
+
+  it('convertBeginningStateFromProse POSTs prose body', () => {
+    const sceneId = '880e8400-e29b-41d4-a716-446655440003';
+    service.convertBeginningStateFromProse(sceneId, 'Mara waits in the rain.').subscribe();
+    const req = httpMock.expectOne(
+      (r) => r.method === 'POST' && r.url.endsWith(`/api/scenes/${sceneId}/beginning-state/convert-from-prose`)
+    );
+    expect(req.request.body).toEqual({ prose: 'Mara waits in the rain.' });
+    req.flush({ beginningStateJson: '{"schemaVersion":1}' });
+  });
+
+  /**
+   * System under test: {@link SceneWorkflowService.clearSceneManuscript}
+   * Test case: POST clear endpoint for a scene.
+   * Expected result: URL matches API and body is empty object.
+   */
+  it('clearSceneManuscript POSTs to manuscript clear endpoint', () => {
+    const sceneId = '990e8400-e29b-41d4-a716-446655440004';
+    service.clearSceneManuscript(sceneId).subscribe();
+    const req = httpMock.expectOne(
+      (r) => r.method === 'POST' && r.url.endsWith(`/api/scenes/${sceneId}/manuscript/clear`)
+    );
+    expect(req.request.body).toEqual({});
+    req.flush(null);
+  });
+
+  /**
    * System under test: {@link SceneWorkflowService.patchScene}
    * Test case: PATCH with partial `{ synopsis }`.
    * Expected result: Method and body match scene update API.

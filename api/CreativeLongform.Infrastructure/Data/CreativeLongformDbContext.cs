@@ -118,11 +118,13 @@ public sealed class CreativeLongformDbContext : DbContext, ICreativeLongformDbCo
             e.Property(x => x.NarrativePerspective).HasMaxLength(128);
             e.Property(x => x.NarrativeTense).HasMaxLength(64);
             e.Property(x => x.BeginningStateJson).HasColumnType("jsonb");
+            e.Property(x => x.BeginningStateProse).HasColumnType("text");
             e.Property(x => x.ApprovedStateTableJson).HasColumnType("jsonb");
             e.Property(x => x.PendingPostStateJson).HasColumnType("jsonb");
             e.Property(x => x.ExpectedEndStateNotes).HasMaxLength(8000);
             e.Property(x => x.LatestDraftText).HasColumnType("text");
             e.Property(x => x.ManuscriptText).HasColumnType("text");
+            e.Property(x => x.LlmThinkingNotes).HasColumnType("text");
             e.HasOne(x => x.Chapter).WithMany(x => x.Scenes).HasForeignKey(x => x.ChapterId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(x => new { x.ChapterId, x.Order }).IsUnique();
         });

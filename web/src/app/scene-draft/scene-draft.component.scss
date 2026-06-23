@@ -335,6 +335,37 @@
     background: transparent !important;
   }
 
+  .llm-thinking-notes {
+    margin-top: 0.75rem;
+    font-size: 0.95rem;
+
+    summary {
+      cursor: pointer;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .hint {
+      margin: 0.5rem 0 0.35rem;
+    }
+  }
+
+  .llm-thinking-body {
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 16rem;
+    overflow: auto;
+    margin: 0;
+    padding: 0.65rem 0.75rem;
+    background: var(--input-bg);
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    color: var(--muted, var(--text));
+  }
+
   .correct-modal-root {
     position: fixed;
     inset: 0;
