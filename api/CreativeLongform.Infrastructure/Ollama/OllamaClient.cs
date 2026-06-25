@@ -2,27 +2,27 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using CreativeLongform.Application.Abstractions;
-using CreativeLongform.Application.Options;
-using Microsoft.Extensions.Options;
+using CreativeLongform.Application.Ollama;
 
 namespace CreativeLongform.Infrastructure.Ollama;
 
 public sealed class OllamaClient : IOllamaClient
 {
     private readonly HttpClient _http;
-    private readonly IOptions<OllamaOptions> _options;
+    private readonly IOllamaBaseUrlProvider _baseUrl;
 
-    public OllamaClient(HttpClient http, IOptions<OllamaOptions> options)
+    public OllamaClient(HttpClient http, IOllamaBaseUrlProvider baseUrl)
     {
         _http = http;
-        _options = options;
+        _baseUrl = baseUrl;
     }
 
     public async Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            var res = await _http.GetAsync("tags", cancellationToken);
+            var apiRoot = await _baseUrl.GetEffectiveBaseUrlAsync(cancellationToken);
+            var res = await _http.GetAsync(OllamaBaseUrlHelper.ApiEndpoint(apiRoot, "tags"), cancellationToken);
             return res.IsSuccessStatusCode;
         }
         catch
@@ -38,6 +38,7 @@ public sealed class OllamaClient : IOllamaClient
         OllamaChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
+        var apiRoot = await _baseUrl.GetEffectiveBaseUrlAsync(cancellationToken);
         var payload = new Dictionary<string, object?>
         {
             ["model"] = model,
@@ -61,15 +62,14 @@ public sealed class OllamaClient : IOllamaClient
                 payload["options"] = ollamaOpts;
         }
 
-        using var response = await _http.PostAsJsonAsync("chat", payload, cancellationToken);
+        using var response = await _http.PostAsJsonAsync(
+            OllamaBaseUrlHelper.ApiEndpoint(apiRoot, "chat"), payload, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             var hint =
-                $"Ollama returned 404 for model '{model}' — nothing is registered under that name. " +
-                "Check: docker compose exec ollama ollama list. " +
-                "Library models (e.g. llama3.2) are installed with: ollama pull <tag>; " +
-                "custom GGUF names from setup are created with ollama create (not pull) — if the import failed, re-run make setup or " +
-                "align OLLAMA_MODEL in .env with a name that appears in ollama list, then recreate the API container.";
+                $"Ollama returned 404 for model '{model}' — nothing is registered under that name on {apiRoot}. " +
+                "Check the Ollama models page or run ollama list on that host. " +
+                "Library models are installed with ollama pull; custom GGUF names use ollama create.";
             throw new InvalidOperationException(hint);
         }
 
@@ -77,7 +77,7 @@ public sealed class OllamaClient : IOllamaClient
         {
             var errBody = await response.Content.ReadAsStringAsync(cancellationToken);
             throw new HttpRequestException(
-                $"Ollama chat failed: {(int)response.StatusCode} {response.ReasonPhrase}. {Truncate(errBody, 500)}");
+                $"Ollama chat failed ({apiRoot}): {(int)response.StatusCode} {response.ReasonPhrase}. {Truncate(errBody, 500)}");
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);

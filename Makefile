@@ -19,7 +19,7 @@ help:
 	@echo "  db-up / db-down         - Postgres only: docker compose up -d postgres"
 	@echo "  migrate                 - apply EF migrations to the configured database"
 	@echo "  build                   - dotnet build + Angular production build (local compile only; does not rebuild Docker images)"
-	@echo "  test                    - dotnet test (all test projects) + Angular unit tests (Chrome headless)"
+	@echo "  test                    - dotnet test (Application enforces line coverage on business logic) + API tests + Angular unit tests"
 	@echo "  dev-api / dev-web       - local dev without Docker (API + ng serve)"
 
 setup: check-docker
@@ -72,7 +72,8 @@ build:
 	cd web && npm run build
 
 test:
-	dotnet test CreativeLongform.sln
+	dotnet test api/CreativeLongform.Application.Tests/CreativeLongform.Application.Tests.csproj --settings api/CreativeLongform.Application.Tests/coverlet.runsettings
+	dotnet test api/CreativeLongform.Api.Tests/CreativeLongform.Api.Tests.csproj
 	cd web && npm run test:ci
 
 dev-api:

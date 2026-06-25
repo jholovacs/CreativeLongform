@@ -37,6 +37,48 @@
     }
 
     <div class="panel">
+      <h2>Ollama server</h2>
+      <p class="hint">
+        Point the API at your Ollama host. Use a remote machine for large models (e.g. 70B). Include port
+        <code>11434</code>; <code>/api</code> is added automatically if omitted. Pull and delete operate on this host.
+      </p>
+      <label [attr.title]="help.baseUrl">
+        API URL
+        <input type="url" [(ngModel)]="baseUrlInput" [disabled]="busy" placeholder="http://192.168.1.50:11434" />
+      </label>
+      @if (prefs.connection.isDbOverridden) {
+        <p class="hint">
+          Using saved override. Environment default:
+          <code>{{ prefs.connection.configurationDefaultBaseUrl }}</code>
+        </p>
+      } @else {
+        <p class="hint">
+          Using environment default:
+          <code>{{ prefs.connection.configurationDefaultBaseUrl }}</code>
+        </p>
+      }
+      <div class="row-actions">
+        <button type="button" class="secondary" (click)="testConnection()" [disabled]="busy || !baseUrlInput.trim()" [title]="help.testConnection">
+          Test connection
+        </button>
+        <button type="button" class="primary" (click)="saveConnection()" [disabled]="busy || !baseUrlInput.trim()" [title]="help.saveConnection">
+          Save server URL
+        </button>
+        <button type="button" class="linkish" (click)="clearBaseUrlOverride()" [disabled]="busy || !prefs.connection.isDbOverridden" [title]="help.useDefaultBaseUrl">
+          Use environment default
+        </button>
+      </div>
+      @if (connectionTestMessage) {
+        <p [class]="connectionTestOk ? 'ok' : 'warn'">{{ connectionTestMessage }}</p>
+      }
+      @if (!isLocalOllamaHost()) {
+        <p class="hint warn">
+          Remote Ollama: use Pull library model below on that host. GGUF URL import requires Ollama on the same machine as the API.
+        </p>
+      }
+    </div>
+
+    <div class="panel">
       <h2>Effective assignments</h2>
       <p class="hint">
         Values here are what the API uses. Clearing a slot falls back to appsettings / environment defaults (e.g.

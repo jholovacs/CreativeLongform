@@ -3,6 +3,11 @@
  */
 export const OLLAMA_MODELS_FIELD_HELP = {
   backToStories: 'Return to the story list.',
+  baseUrl:
+    'Ollama HTTP API root. Example: http://192.168.1.50:11434 or http://dev-ai.local:11434/api. All LLM and model-admin calls use this host.',
+  testConnection: 'Probe GET /api/tags on the URL above without saving.',
+  saveConnection: 'Save the Ollama server URL to the database (takes effect immediately for new LLM requests).',
+  useDefaultBaseUrl: 'Remove saved URL override; use Ollama:BaseUrl from appsettings / Docker environment.',
   writer:
     'Model for scene prose: draft, expansion passes, and repair rewrites. Often a strong instruction-tuned or creative model.',
   critic:

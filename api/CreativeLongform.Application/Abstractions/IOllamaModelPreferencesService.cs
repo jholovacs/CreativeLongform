@@ -19,6 +19,8 @@ public interface IOllamaModelPreferencesService
     Task<string> GetWorldBuildingModelAsync(CancellationToken cancellationToken = default);
     Task<string> GetPreStateModelAsync(CancellationToken cancellationToken = default);
     Task<string> GetPostStateModelAsync(CancellationToken cancellationToken = default);
+
+    Task<OllamaConnectionSettingsDto> GetConnectionSettingsAsync(CancellationToken cancellationToken = default);
 }
 
 public sealed class OllamaModelAssignmentsDto
@@ -48,6 +50,10 @@ public sealed class OllamaModelAssignmentsPatch
     public bool? ClearWorldBuilding { get; set; }
     public bool? ClearPreState { get; set; }
     public bool? ClearPostState { get; set; }
+    /// <summary>Ollama API root (…/api). Empty string clears override.</summary>
+    public string? BaseUrl { get; set; }
+    /// <summary>When true, clear DB override for Ollama URL (fall back to appsettings / env).</summary>
+    public bool? ClearBaseUrl { get; set; }
 }
 
 public sealed class OllamaModelChangeLogDto

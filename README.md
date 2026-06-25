@@ -1,5 +1,7 @@
 # Creative Longform
 
+[![CI](https://github.com/jholovacs/CreativeLongform/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jholovacs/CreativeLongform/actions/workflows/ci.yml)
+
 Local-first long-form fiction assistant: **.NET 8** Web API (OData, EF Core, SignalR), **PostgreSQL**, **Ollama**, and an **Angular** client.
 
 ---

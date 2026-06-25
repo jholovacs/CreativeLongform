@@ -1,23 +1,25 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using CreativeLongform.Application.Abstractions;
-using System.Linq;
+using CreativeLongform.Application.Ollama;
 
 namespace CreativeLongform.Infrastructure.Ollama;
 
 public sealed class OllamaAdminApi : IOllamaAdminApi
 {
     private readonly HttpClient _http;
+    private readonly IOllamaBaseUrlProvider _baseUrl;
 
-    public OllamaAdminApi(HttpClient http)
+    public OllamaAdminApi(HttpClient http, IOllamaBaseUrlProvider baseUrl)
     {
         _http = http;
+        _baseUrl = baseUrl;
     }
 
     /// <summary>
     /// Ollama often returns JSON like <c>{"error":"..."}</c>. Surface it clearly and add hints for common storage failures.
     /// </summary>
-    private static string FormatOllamaFailure(string operation, int statusCode, string body)
+    private static string FormatOllamaFailure(string operation, string apiRoot, int statusCode, string body)
     {
         var trimmed = body.Trim();
         if (trimmed.StartsWith('{') && trimmed.Contains("\"error\""))
@@ -28,7 +30,7 @@ public sealed class OllamaAdminApi : IOllamaAdminApi
                 if (doc.RootElement.TryGetProperty("error", out var err) && err.ValueKind == JsonValueKind.String)
                 {
                     var msg = err.GetString() ?? trimmed;
-                    return $"{operation} failed ({statusCode}): {msg}{AppendStorageHint(msg)}";
+                    return $"{operation} failed ({apiRoot}, {statusCode}): {msg}{AppendStorageHint(msg)}";
                 }
             }
             catch
@@ -37,7 +39,7 @@ public sealed class OllamaAdminApi : IOllamaAdminApi
             }
         }
 
-        return $"{operation} failed ({statusCode}): {trimmed}{AppendStorageHint(trimmed)}";
+        return $"{operation} failed ({apiRoot}, {statusCode}): {trimmed}{AppendStorageHint(trimmed)}";
     }
 
     private static string AppendStorageHint(string message)
@@ -58,8 +60,9 @@ public sealed class OllamaAdminApi : IOllamaAdminApi
 
     public async Task<IReadOnlyList<OllamaLocalModelInfo>> ListLocalModelsAsync(CancellationToken cancellationToken = default)
     {
-        var vramByName = await GetVramBytesByModelNameAsync(cancellationToken);
-        using var response = await _http.GetAsync("tags", cancellationToken);
+        var apiRoot = await _baseUrl.GetEffectiveBaseUrlAsync(cancellationToken);
+        var vramByName = await GetVramBytesByModelNameAsync(apiRoot, cancellationToken);
+        using var response = await _http.GetAsync(OllamaBaseUrlHelper.ApiEndpoint(apiRoot, "tags"), cancellationToken);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
@@ -102,11 +105,11 @@ public sealed class OllamaAdminApi : IOllamaAdminApi
     }
 
     /// <summary>VRAM per model name from <c>GET /api/ps</c> (models currently loaded).</summary>
-    private async Task<Dictionary<string, long>> GetVramBytesByModelNameAsync(CancellationToken cancellationToken)
+    private async Task<Dictionary<string, long>> GetVramBytesByModelNameAsync(string apiRoot, CancellationToken cancellationToken)
     {
         try
         {
-            using var response = await _http.GetAsync("ps", cancellationToken);
+            using var response = await _http.GetAsync(OllamaBaseUrlHelper.ApiEndpoint(apiRoot, "ps"), cancellationToken);
             if (!response.IsSuccessStatusCode)
                 return new Dictionary<string, long>(StringComparer.Ordinal);
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -143,14 +146,15 @@ public sealed class OllamaAdminApi : IOllamaAdminApi
     {
         if (string.IsNullOrWhiteSpace(modelName))
             throw new ArgumentException("Model name is required.", nameof(modelName));
+        var apiRoot = await _baseUrl.GetEffectiveBaseUrlAsync(cancellationToken);
         using var response = await _http.PostAsJsonAsync(
-            "pull",
+            OllamaBaseUrlHelper.ApiEndpoint(apiRoot, "pull"),
             new Dictionary<string, object?> { ["name"] = modelName.Trim(), ["stream"] = false },
             cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            throw new InvalidOperationException(FormatOllamaFailure("Ollama pull", (int)response.StatusCode, body));
+            throw new InvalidOperationException(FormatOllamaFailure("Ollama pull", apiRoot, (int)response.StatusCode, body));
         }
     }
 
@@ -158,7 +162,8 @@ public sealed class OllamaAdminApi : IOllamaAdminApi
     {
         if (string.IsNullOrWhiteSpace(modelName))
             throw new ArgumentException("Model name is required.", nameof(modelName));
-        using var request = new HttpRequestMessage(HttpMethod.Post, "pull")
+        var apiRoot = await _baseUrl.GetEffectiveBaseUrlAsync(cancellationToken);
+        using var request = new HttpRequestMessage(HttpMethod.Post, OllamaBaseUrlHelper.ApiEndpoint(apiRoot, "pull"))
         {
             Content = JsonContent.Create(new Dictionary<string, object?>
             {
@@ -170,7 +175,7 @@ public sealed class OllamaAdminApi : IOllamaAdminApi
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            throw new InvalidOperationException(FormatOllamaFailure("Ollama pull", (int)response.StatusCode, body));
+            throw new InvalidOperationException(FormatOllamaFailure("Ollama pull", apiRoot, (int)response.StatusCode, body));
         }
 
         await using var src = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -181,7 +186,8 @@ public sealed class OllamaAdminApi : IOllamaAdminApi
     {
         if (string.IsNullOrWhiteSpace(modelName))
             throw new ArgumentException("Model name is required.", nameof(modelName));
-        using var request = new HttpRequestMessage(HttpMethod.Delete, "delete")
+        var apiRoot = await _baseUrl.GetEffectiveBaseUrlAsync(cancellationToken);
+        using var request = new HttpRequestMessage(HttpMethod.Delete, OllamaBaseUrlHelper.ApiEndpoint(apiRoot, "delete"))
         {
             Content = JsonContent.Create(new Dictionary<string, object?> { ["model"] = modelName.Trim() })
         };
@@ -189,7 +195,7 @@ public sealed class OllamaAdminApi : IOllamaAdminApi
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            throw new InvalidOperationException(FormatOllamaFailure("Ollama delete", (int)response.StatusCode, body));
+            throw new InvalidOperationException(FormatOllamaFailure("Ollama delete", apiRoot, (int)response.StatusCode, body));
         }
     }
 
@@ -200,10 +206,11 @@ public sealed class OllamaAdminApi : IOllamaAdminApi
             throw new ArgumentException("Model name is required.", nameof(modelName));
         if (string.IsNullOrWhiteSpace(ggufAbsolutePath))
             throw new ArgumentException("GGUF path is required.", nameof(ggufAbsolutePath));
+        var apiRoot = await _baseUrl.GetEffectiveBaseUrlAsync(cancellationToken);
         var path = ggufAbsolutePath.Trim().Replace('\\', '/');
         var modelfile = $"FROM {path}\n";
         using var response = await _http.PostAsJsonAsync(
-            "create",
+            OllamaBaseUrlHelper.ApiEndpoint(apiRoot, "create"),
             new Dictionary<string, object?>
             {
                 ["name"] = modelName.Trim(),
@@ -214,7 +221,7 @@ public sealed class OllamaAdminApi : IOllamaAdminApi
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            throw new InvalidOperationException(FormatOllamaFailure("Ollama create", (int)response.StatusCode, body));
+            throw new InvalidOperationException(FormatOllamaFailure("Ollama create", apiRoot, (int)response.StatusCode, body));
         }
     }
 }

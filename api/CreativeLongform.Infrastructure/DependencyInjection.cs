@@ -25,22 +25,12 @@ public static class DependencyInjection
         services.Configure<OllamaOptions>(configuration.GetSection(OllamaOptions.SectionName));
 
         services.AddScoped<IOllamaModelPreferencesService, OllamaModelPreferencesService>();
+        services.AddScoped<IOllamaBaseUrlProvider, OllamaBaseUrlProvider>();
 
-        services.AddHttpClient<IOllamaAdminApi, OllamaAdminApi>((sp, client) =>
-        {
-            var opts = sp.GetRequiredService<IConfiguration>().GetSection(OllamaOptions.SectionName)
-                .Get<OllamaOptions>() ?? new OllamaOptions();
-            client.BaseAddress = new Uri(opts.BaseUrl.TrimEnd('/') + "/");
-            client.Timeout = TimeSpan.FromMinutes(60);
-        });
-
-        services.AddHttpClient<IOllamaClient, OllamaClient>((sp, client) =>
-        {
-            var opts = sp.GetRequiredService<IConfiguration>().GetSection(OllamaOptions.SectionName)
-                .Get<OllamaOptions>() ?? new OllamaOptions();
-            client.BaseAddress = new Uri(opts.BaseUrl.TrimEnd('/') + "/");
-            client.Timeout = TimeSpan.FromMinutes(15);
-        });
+        services.AddHttpClient<IOllamaAdminApi, OllamaAdminApi>(client =>
+            client.Timeout = TimeSpan.FromMinutes(60));
+        services.AddHttpClient<IOllamaClient, OllamaClient>(client =>
+            client.Timeout = TimeSpan.FromMinutes(15));
 
         services.AddSingleton<IGenerationRunCancellationRegistry, GenerationRunCancellationRegistry>();
         services.AddScoped<IGenerationOrchestrator, GenerationOrchestrator>();

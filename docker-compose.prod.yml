@@ -48,7 +48,7 @@ services:
       ASPNETCORE_URLS: http://+:8080
       DisableHttpsRedirection: "true"
       ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-creativelongform};Username=${POSTGRES_USER:-creative};Password=${POSTGRES_PASSWORD:-creative}"
-      Ollama__BaseUrl: "http://ollama:11434/api"
+      Ollama__BaseUrl: "${OLLAMA_BASE_URL:-http://ollama:11434/api}"
       Ollama__WriterModel: "${OLLAMA_MODEL:-llama3.2}"
       Ollama__CriticModel: "${OLLAMA_MODEL:-llama3.2}"
       Ollama__ImportStagingDirectory: "/shared/ollama-import"

@@ -55,6 +55,20 @@
     padding-left: 0.75rem;
   }
 
+  .ok {
+    color: var(--text);
+    border-left: 3px solid var(--accent, #2a7);
+    padding-left: 0.75rem;
+  }
+
+  .row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+    align-items: center;
+    margin-top: 0.75rem;
+  }
+
   .panel {
     background: var(--surface);
     border: 1px solid var(--border);

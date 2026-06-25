@@ -54,6 +54,9 @@ export class OllamaModelsComponent implements OnInit {
   worldBuildingInput = '';
   preStateInput = '';
   postStateInput = '';
+  baseUrlInput = '';
+  connectionTestMessage: string | null = null;
+  connectionTestOk: boolean | null = null;
 
   pullModel = '';
   /** Live status while a streamed library pull is in progress (NDJSON lines from Ollama). */
@@ -214,6 +217,9 @@ export class OllamaModelsComponent implements OnInit {
         this.worldBuildingInput = p.assignments.worldBuildingModel;
         this.preStateInput = p.assignments.preStateModel;
         this.postStateInput = p.assignments.postStateModel;
+        this.baseUrlInput = p.connection.effectiveBaseUrl;
+        this.connectionTestMessage = null;
+        this.connectionTestOk = null;
         this.loading = false;
       },
       error: () => {
@@ -284,14 +290,25 @@ export class OllamaModelsComponent implements OnInit {
   }
 
   save(): void {
-    const body: OllamaModelAssignmentsPatch = {
-      writerModel: this.writerInput.trim(),
-      criticModel: this.criticInput.trim(),
-      agentModel: this.agentInput.trim(),
-      worldBuildingModel: this.worldBuildingInput.trim(),
-      preStateModel: this.preStateInput.trim(),
-      postStateModel: this.postStateInput.trim()
-    };
+    this.savePreferences(false);
+  }
+
+  saveConnection(): void {
+    this.savePreferences(true);
+  }
+
+  private savePreferences(connectionOnly: boolean): void {
+    const body: OllamaModelAssignmentsPatch = connectionOnly
+      ? { baseUrl: this.baseUrlInput.trim() }
+      : {
+          writerModel: this.writerInput.trim(),
+          criticModel: this.criticInput.trim(),
+          agentModel: this.agentInput.trim(),
+          worldBuildingModel: this.worldBuildingInput.trim(),
+          preStateModel: this.preStateInput.trim(),
+          postStateModel: this.postStateInput.trim(),
+          baseUrl: this.baseUrlInput.trim()
+        };
     this.busy = true;
     this.inlineError = null;
     this.ollama.putPreferences(body).subscribe({
@@ -303,6 +320,52 @@ export class OllamaModelsComponent implements OnInit {
         this.busy = false;
       }
     });
+  }
+
+  clearBaseUrlOverride(): void {
+    const body: OllamaModelAssignmentsPatch = { clearBaseUrl: true };
+    this.busy = true;
+    this.inlineError = null;
+    this.ollama.putPreferences(body).subscribe({
+      next: () => {
+        this.busy = false;
+        this.reload();
+      },
+      error: () => {
+        this.busy = false;
+      }
+    });
+  }
+
+  testConnection(): void {
+    this.busy = true;
+    this.connectionTestMessage = null;
+    this.connectionTestOk = null;
+    this.ollama.testConnection(this.baseUrlInput).subscribe({
+      next: (res) => {
+        this.busy = false;
+        this.connectionTestOk = res.connected;
+        this.connectionTestMessage = res.connected
+          ? `Connected to ${res.baseUrl}`
+          : res.error ?? `Could not reach ${res.baseUrl}`;
+      },
+      error: () => {
+        this.busy = false;
+        this.connectionTestOk = false;
+        this.connectionTestMessage = 'Connection test failed.';
+      }
+    });
+  }
+
+  isLocalOllamaHost(): boolean {
+    const url = this.baseUrlInput.trim().toLowerCase();
+    if (!url) return true;
+    return (
+      url.includes('localhost') ||
+      url.includes('127.0.0.1') ||
+      url.includes('://ollama') ||
+      url.includes('host.docker.internal')
+    );
   }
 
   clearSlot(role: 'writer' | 'critic' | 'agent' | 'worldBuilding' | 'preState' | 'postState'): void {
@@ -455,6 +518,8 @@ export class OllamaModelsComponent implements OnInit {
         return 'Pre-state';
       case 5:
         return 'Post-state';
+      case 6:
+        return 'Connection';
       default:
         return String(role);
     }

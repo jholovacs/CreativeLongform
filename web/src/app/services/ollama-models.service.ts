@@ -52,11 +52,26 @@ export interface OllamaDiskSpaceDto {
 /** GET /api/ollama/preferences — assignments plus installed Ollama tags and list errors. */
 export interface OllamaPreferencesResponse {
   assignments: OllamaModelAssignmentsDto;
+  connection: OllamaConnectionSettingsDto;
   installedModels: OllamaInstalledModelDto[];
   /** Non-null when listing local models failed (still may show saved assignments). */
   ollamaListError: string | null;
   /** Present when <code>Ollama:DiskSpaceCheckPath</code> or <code>ImportStagingDirectory</code> is set and readable. */
   diskSpace?: OllamaDiskSpaceDto | null;
+}
+
+/** Ollama HTTP API connection (effective URL + override state). */
+export interface OllamaConnectionSettingsDto {
+  effectiveBaseUrl: string;
+  configurationDefaultBaseUrl: string;
+  dbOverrideBaseUrl: string | null;
+  isDbOverridden: boolean;
+}
+
+export interface OllamaTestConnectionResponse {
+  baseUrl: string;
+  connected: boolean;
+  error?: string | null;
 }
 
 /** Partial PUT body: set a role or clear it back to default. */
@@ -74,6 +89,9 @@ export interface OllamaModelAssignmentsPatch {
   clearWorldBuilding?: boolean;
   clearPreState?: boolean;
   clearPostState?: boolean;
+  /** Ollama API root (…/api). Empty clears DB override. */
+  baseUrl?: string | null;
+  clearBaseUrl?: boolean;
 }
 
 /** One row from GET /api/ollama/change-log (audit of model assignments). */
@@ -98,6 +116,12 @@ export class OllamaModelsService {
 
   putPreferences(body: OllamaModelAssignmentsPatch) {
     return this.http.put<OllamaModelAssignmentsDto>(`${apiBaseUrl}/api/ollama/preferences`, body);
+  }
+
+  testConnection(baseUrl?: string | null) {
+    return this.http.post<OllamaTestConnectionResponse>(`${apiBaseUrl}/api/ollama/test-connection`, {
+      baseUrl: baseUrl?.trim() || null
+    });
   }
 
   /** Server clamps `take` to 1–500 (newest first). */

@@ -30,8 +30,16 @@ jobs:
       - name: Build
         run: dotnet build CreativeLongform.sln --no-restore --configuration Release
 
-      - name: Test
-        run: dotnet test CreativeLongform.sln --no-build --configuration Release --verbosity normal
+      - name: Application tests (coverage gate)
+        run: >
+          dotnet test api/CreativeLongform.Application.Tests/CreativeLongform.Application.Tests.csproj
+          --no-build --configuration Release --verbosity normal
+          --settings api/CreativeLongform.Application.Tests/coverlet.runsettings
+
+      - name: API integration tests
+        run: >
+          dotnet test api/CreativeLongform.Api.Tests/CreativeLongform.Api.Tests.csproj
+          --no-build --configuration Release --verbosity normal
         # Api.Tests uses Testcontainers (PostgreSQL); Docker is available on ubuntu-latest.
 
   angular:

@@ -25,5 +25,8 @@ public sealed class OllamaModelPreferences
     /// <summary>Post-scene narrative state JSON from prose. Null = use writer effective model.</summary>
     public string? PostStateModel { get; set; }
 
+    /// <summary>Ollama HTTP API root (…/api). Null = use Ollama:BaseUrl from configuration.</summary>
+    public string? BaseUrl { get; set; }
+
     public DateTimeOffset UpdatedAt { get; set; }
 }

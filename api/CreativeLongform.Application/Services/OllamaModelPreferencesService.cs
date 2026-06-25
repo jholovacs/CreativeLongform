@@ -1,4 +1,5 @@
 using CreativeLongform.Application.Abstractions;
+using CreativeLongform.Application.Ollama;
 using CreativeLongform.Application.Options;
 using CreativeLongform.Domain.Entities;
 using CreativeLongform.Domain.Enums;
@@ -83,6 +84,15 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
             row.PostStateModel = string.IsNullOrEmpty(t) ? null : t;
         }
 
+        string? prevBaseUrl = row.BaseUrl;
+        if (patch.ClearBaseUrl == true)
+            row.BaseUrl = null;
+        else if (patch.BaseUrl is { } bu)
+        {
+            var t = bu.Trim();
+            row.BaseUrl = string.IsNullOrEmpty(t) ? null : OllamaBaseUrlHelper.NormalizeApiRoot(t);
+        }
+
         row.UpdatedAt = DateTimeOffset.UtcNow;
         await _db.SaveChangesAsync(cancellationToken);
 
@@ -111,6 +121,21 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
         Log(OllamaModelRole.PreState, before.PreStateModel, after.PreStateModel);
         Log(OllamaModelRole.PostState, before.PostStateModel, after.PostStateModel);
 
+        var afterConnection = await GetConnectionSettingsAsync(cancellationToken);
+        var prevNorm = string.IsNullOrWhiteSpace(prevBaseUrl) ? null : OllamaBaseUrlHelper.NormalizeApiRoot(prevBaseUrl);
+        if (!string.Equals(prevNorm, afterConnection.DbOverrideBaseUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            _db.OllamaModelChangeLogs.Add(new OllamaModelChangeLog
+            {
+                Id = Guid.NewGuid(),
+                OccurredAt = DateTimeOffset.UtcNow,
+                Role = OllamaModelRole.Connection,
+                PreviousModel = prevNorm,
+                NewModel = afterConnection.DbOverrideBaseUrl ?? afterConnection.ConfigurationDefaultBaseUrl,
+                Source = src
+            });
+        }
+
         await _db.SaveChangesAsync(cancellationToken);
         return after;
     }
@@ -132,6 +157,22 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
                 Source = x.Source
             })
             .ToListAsync(cancellationToken);
+    }
+
+    public async Task<OllamaConnectionSettingsDto> GetConnectionSettingsAsync(CancellationToken cancellationToken = default)
+    {
+        await EnsureSingletonAsync(cancellationToken);
+        var row = await _db.OllamaModelPreferences.AsNoTracking()
+            .FirstAsync(x => x.Id == OllamaModelPreferences.SingletonId, cancellationToken);
+        var configDefault = OllamaBaseUrlHelper.NormalizeApiRoot(_options.Value.BaseUrl);
+        var dbOverride = string.IsNullOrWhiteSpace(row.BaseUrl) ? null : OllamaBaseUrlHelper.NormalizeApiRoot(row.BaseUrl);
+        return new OllamaConnectionSettingsDto
+        {
+            ConfigurationDefaultBaseUrl = configDefault,
+            DbOverrideBaseUrl = dbOverride,
+            IsDbOverridden = dbOverride is not null,
+            EffectiveBaseUrl = dbOverride ?? configDefault
+        };
     }
 
     public async Task<string> GetWriterModelAsync(CancellationToken cancellationToken = default)

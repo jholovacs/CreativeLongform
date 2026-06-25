@@ -10,5 +10,7 @@ public enum OllamaModelRole
     /// <summary>Beginning narrative state JSON (when not taken from author or prior scene).</summary>
     PreState = 4,
     /// <summary>End-of-scene narrative state JSON derived from prose.</summary>
-    PostState = 5
+    PostState = 5,
+    /// <summary>Ollama HTTP API base URL.</summary>
+    Connection = 6
 }
