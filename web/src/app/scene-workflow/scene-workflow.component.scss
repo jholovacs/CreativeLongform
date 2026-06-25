@@ -353,6 +353,14 @@
     z-index: 1002;
   }
 
+  .gen-log-now {
+    margin: 0 0 0.85rem;
+    padding: 0.65rem 0.75rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface) 88%, var(--accent) 12%);
+  }
+
   .gen-log-scroll {
     flex: 1;
     overflow: auto;

@@ -125,6 +125,8 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
 
   generationLogEntries: GenerationLogEntry[] = [];
   generationLogModalOpen = false;
+  /** Sticky label in the progress modal while the pipeline is in flight. */
+  generationNowLabel: string | null = null;
   error: string | null = null;
   busy = false;
   generationRunId: string | null = null;
@@ -1043,6 +1045,10 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   }
 
   private pushProgressEvent(eventName: string, p: GenerationProgressPayload): void {
+    this.updateGenerationNow(eventName, p);
+    if (eventName === 'LlmStarted') {
+      return;
+    }
     const kind = this.mapEventToKind(eventName);
     const stepLabel = (p.step ?? '').replace(/_/g, ' ').trim() || eventName;
     const title =
@@ -1072,6 +1078,33 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
       llmCallId: p.llmCallId ?? null
     };
     this.generationLogEntries = [entry, ...this.generationLogEntries];
+  }
+
+  /** Live “what is happening now” line (LLM waits can be minutes; log rows only show completed steps). */
+  private updateGenerationNow(eventName: string, p: GenerationProgressPayload): void {
+    if (eventName === 'RunFinished') {
+      this.generationNowLabel = null;
+      return;
+    }
+    const detail = (p.detail ?? '').trim();
+    switch (eventName) {
+      case 'LlmStarted':
+        this.generationNowLabel = detail || `Waiting on model (${p.step ?? 'LLM'})…`;
+        break;
+      case 'LlmRoundtrip':
+        this.generationNowLabel = 'Processing model response…';
+        break;
+      case 'StepStarted':
+      case 'RunStarted':
+      case 'AgentEditTurn':
+        this.generationNowLabel = detail || (p.step ?? 'Working…');
+        break;
+      case 'Local':
+        if (detail) {
+          this.generationNowLabel = detail;
+        }
+        break;
+    }
   }
 
   private mapEventToKind(eventName: string): GenerationLogKind {
@@ -1263,6 +1296,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.busy = true;
     this.error = null;
     this.generationLogEntries = [];
+    this.generationNowLabel = 'Saving scene and starting generation…';
     this.generationLogModalOpen = true;
     this.pushProgressEvent('Local', {
       runId: '',

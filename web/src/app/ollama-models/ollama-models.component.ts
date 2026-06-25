@@ -504,6 +504,29 @@ export class OllamaModelsComponent implements OnInit {
     else this.postStateInput = name;
   }
 
+  /** Installed Ollama tags (sorted) for assignment dropdowns. */
+  private installedModelNames(): string[] {
+    const models = this.prefs?.installedModels ?? [];
+    return models
+      .map((m) => m.name)
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }
+
+  /** Dropdown options: installed models plus the current value when it is not installed. */
+  modelSelectOptions(currentValue: string): { value: string; label: string }[] {
+    const names = this.installedModelNames();
+    const cur = currentValue.trim();
+    const options = names.map((n) => ({ value: n, label: n }));
+    if (cur && !names.includes(cur)) {
+      options.unshift({ value: cur, label: `${cur} (not installed)` });
+    }
+    return options;
+  }
+
+  modelSelectDisabled(currentValue: string): boolean {
+    return this.busy || this.modelSelectOptions(currentValue).length === 0;
+  }
+
   roleLabel(role: number): string {
     switch (role) {
       case 0:

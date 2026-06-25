@@ -55,6 +55,11 @@
     padding-left: 0.75rem;
   }
 
+  .ollama-list-error {
+    max-width: 48rem;
+    margin-bottom: 1rem;
+  }
+
   .ok {
     color: var(--text);
     border-left: 3px solid var(--accent, #2a7);
@@ -176,12 +181,21 @@
   }
 
   input[type='text'],
-  input[type='url'] {
+  input[type='url'],
+  .grid select {
     padding: 0.4rem 0.55rem;
     border-radius: 6px;
     border: 1px solid var(--border);
     background: var(--input-bg);
     color: var(--text);
+    font-family: ui-monospace, monospace;
+    font-size: 0.88rem;
+    min-width: 0;
+  }
+
+  .grid select:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
   }
 
   .linkish {

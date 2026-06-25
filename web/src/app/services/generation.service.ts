@@ -127,6 +127,7 @@ export class GenerationService {
     connection.on('RepairAttempt', (payload: GenerationProgressPayload) => emit('RepairAttempt', payload));
     connection.on('RepairDraftApplied', (payload: GenerationProgressPayload) => emit('RepairDraftApplied', payload));
     connection.on('DraftReviewNote', (payload: GenerationProgressPayload) => emit('DraftReviewNote', payload));
+    connection.on('LlmStarted', (payload: GenerationProgressPayload) => emit('LlmStarted', payload));
     connection.on('LlmRoundtrip', (payload: GenerationProgressPayload) => emit('LlmRoundtrip', payload));
     connection.on('RunFinished', (payload: GenerationProgressPayload) => handlers.onFinished?.(payload));
 

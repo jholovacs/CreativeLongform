@@ -1376,6 +1376,9 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             _logger.LogInformation(
                 "Draft short ({Words} words, min {Min}); running expansion pass for run {RunId}",
                 CountWords(text), minWords, run.Id);
+            await NotifyStepAsync(progress.Notifier, run.Id, PipelineStep.Draft, progress.ElapsedMs,
+                $"Draft expansion: first pass was {CountWords(text)} words (target ≥{minWords}); asking model «{model}» to continue the scene.",
+                cancellationToken);
             var expandSystem =
                 """
                 You expand fiction for long-form publication. Continue in the same voice, tense, and POV.
@@ -2084,6 +2087,17 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             format = jsonFormat ? "json" : (string?)null,
             num_predict = chatOptions?.NumPredict
         });
+        if (progress is not null && audit.GenerationRunId is Guid progressRunIdForStart)
+        {
+            var startLabel = progressSummary ?? step.ToString();
+            await progress.Notifier.NotifyAsync(progressRunIdForStart, "LlmStarted", step.ToString(),
+                $"{startLabel}: waiting on model «{model}»…",
+                cancellationToken,
+                progress.ElapsedMs(),
+                null,
+                null);
+        }
+
         var roundSw = Stopwatch.StartNew();
         var result = await ollama.ChatAsync(model, messages, jsonFormat, chatOptions, cancellationToken);
         roundSw.Stop();
