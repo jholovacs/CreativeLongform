@@ -52,6 +52,14 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
             row.CriticModel = string.IsNullOrEmpty(t) ? null : t;
         }
 
+        if (patch.ClearQualityCritic == true)
+            row.QualityCriticModel = null;
+        else if (patch.QualityCriticModel is { } qc)
+        {
+            var t = qc.Trim();
+            row.QualityCriticModel = string.IsNullOrEmpty(t) ? null : t;
+        }
+
         if (patch.ClearAgent == true)
             row.AgentModel = null;
         else if (patch.AgentModel is { } a)
@@ -124,6 +132,7 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
 
         Log(OllamaModelRole.Writer, before.WriterModel, after.WriterModel);
         Log(OllamaModelRole.Critic, before.CriticModel, after.CriticModel);
+        Log(OllamaModelRole.QualityCritic, before.QualityCriticModel, after.QualityCriticModel);
         Log(OllamaModelRole.Agent, before.AgentModel, after.AgentModel);
         Log(OllamaModelRole.WorldBuilding, before.WorldBuildingModel, after.WorldBuildingModel);
         Log(OllamaModelRole.PreState, before.PreStateModel, after.PreStateModel);
@@ -200,6 +209,14 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
         return EffectiveCritic(row);
     }
 
+    public async Task<string> GetQualityCriticModelAsync(CancellationToken cancellationToken = default)
+    {
+        await EnsureSingletonAsync(cancellationToken);
+        var row = await _db.OllamaModelPreferences.AsNoTracking()
+            .FirstAsync(x => x.Id == OllamaModelPreferences.SingletonId, cancellationToken);
+        return EffectiveQualityCritic(row);
+    }
+
     public async Task<string> GetAgentModelAsync(CancellationToken cancellationToken = default)
     {
         await EnsureSingletonAsync(cancellationToken);
@@ -250,6 +267,7 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
         var o = _options.Value;
         var writer = EffectiveWriter(row);
         var critic = EffectiveCritic(row);
+        var qualityCritic = EffectiveQualityCritic(row);
         var agent = EffectiveAgent(row, o);
         var wb = EffectiveWorldBuilding(row, o);
         var pre = EffectivePreState(row, o);
@@ -258,6 +276,7 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
         var overridden = new List<OllamaModelRole>();
         if (!string.IsNullOrWhiteSpace(row.WriterModel)) overridden.Add(OllamaModelRole.Writer);
         if (!string.IsNullOrWhiteSpace(row.CriticModel)) overridden.Add(OllamaModelRole.Critic);
+        if (!string.IsNullOrWhiteSpace(row.QualityCriticModel)) overridden.Add(OllamaModelRole.QualityCritic);
         if (!string.IsNullOrWhiteSpace(row.AgentModel)) overridden.Add(OllamaModelRole.Agent);
         if (!string.IsNullOrWhiteSpace(row.WorldBuildingModel)) overridden.Add(OllamaModelRole.WorldBuilding);
         if (!string.IsNullOrWhiteSpace(row.PreStateModel)) overridden.Add(OllamaModelRole.PreState);
@@ -267,6 +286,7 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
         {
             WriterModel = writer,
             CriticModel = critic,
+            QualityCriticModel = qualityCritic,
             AgentModel = agent,
             WorldBuildingModel = wb,
             PreStateModel = pre,
@@ -281,6 +301,15 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
 
     private string EffectiveCritic(OllamaModelPreferences row) =>
         !string.IsNullOrWhiteSpace(row.CriticModel) ? row.CriticModel.Trim() : _options.Value.CriticModel.Trim();
+
+    private string EffectiveQualityCritic(OllamaModelPreferences row)
+    {
+        if (!string.IsNullOrWhiteSpace(row.QualityCriticModel))
+            return row.QualityCriticModel.Trim();
+        if (!string.IsNullOrWhiteSpace(_options.Value.QualityCriticModel))
+            return _options.Value.QualityCriticModel.Trim();
+        return EffectiveCritic(row);
+    }
 
     private string EffectiveAgent(OllamaModelPreferences row, OllamaOptions o)
     {

@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using CreativeLongform.Application.Abstractions;
+using CreativeLongform.Application.Agent;
 using CreativeLongform.Application.Generation;
 using CreativeLongform.Domain.Enums;
 using Microsoft.Extensions.Logging;
@@ -27,7 +28,14 @@ public static partial class AgenticEditLoop
     private const int ProgressPatchExcerptChars = 7000;
 
     private static readonly string SystemPrompt = """
-        You are an orchestrating fiction editor agent. You refine scene drafts until they match the author's instructions, pass compliance, and read with strong craft — using tools instead of blind full-scene rewrites.
+        You are the orchestrating fiction editor agent — the center of the creative pipeline. You decide how to realize the author's vision: gather context, choose tools, delegate to specialist models when needed, independently verify their assertions, and finish only when checks pass.
+
+        AGENT MANDATE:
+        - Decide: every turn, state conclusion + nextStep before acting.
+        - Delegate: invoke_writer (creative), invoke_editor (voice/format), invoke_corrector (mechanics) with focused instructions and context scope.
+        - Verify: run_compliance_check and run_quality_check (when available) after substantive edits; never trust critic output without find_text grounding.
+        - Resources: query_lore, query_timeline, read_section, find_text before editing; use run_script for batched surgical fixes.
+        - Finish: only when mission/scene requirements are met AND verification passes on the CURRENT draft.
 
         BOOK DIRECTIVES (tone, content style, synopsis) appear in every user message — honor them in every edit and delegation.
 
@@ -46,9 +54,12 @@ public static partial class AgenticEditLoop
         - { "action": "patch_text", "mode": "<mode>", "paragraphStart": <int>, "paragraphEnd": <int optional>, "excerpt": "<locator>", "text": "<payload>", "useRegex": <bool>, "caseSensitive": <bool> } — surgical excerpt edits without full ¶ replace. Modes: replace_excerpt | remove_excerpt | insert_before_excerpt | insert_after_excerpt | append_paragraph | prepend_paragraph.
         - { "action": "query_lore", "query": "<keywords>", "scope": "scene"|"book"|"relationships"|"all" } — world elements, book notes, relationships.
         - { "action": "query_timeline", "query": "<keywords optional>", "when": "before"|"after"|"all"|"current" } — other scenes in story order for continuity (never contradict earlier/later canon).
+        - { "action": "check_scene_brief" } — deterministic beat checklist vs scene instructions (run on turn 1 before editing).
+        - { "action": "check_word_budget" } — current word count vs session target; recommends break_up_scene when short.
+        - { "action": "break_up_scene", "beats": [ { "mode": "expand"|"insert_after", "paragraphStart", "paragraphEnd", "afterParagraph", "instruction", "targetWords" } ], "reason": "<why>" } — Writer expands thin ¶s or inserts new beats (high ¶ first); max 8 beats; requires full draft read.
         - { "action": "run_compliance_check" } — compliance on CURRENT full draft (perspective, POV, tense, grammar/punctuation, canon).
         - { "action": "run_quality_check" } — prose craft quality on CURRENT full draft (when available in this session).
-        - { "action": "invoke_writer", "paragraphStart": <int>, "paragraphEnd": <int>, "instruction": "<brief>", "focusExcerpt": "<optional>", "contextParagraphsBefore": <int>, "contextParagraphsAfter": <int>, "complianceNotes": "<optional>", "reason": "<why>" } — creative rewrite; YOU choose how much context the delegated model needs via focusExcerpt and contextParagraphsBefore/After.
+        - { "action": "invoke_writer", "paragraphStart": <int>, "paragraphEnd": <int>, "instruction": "<brief>", "focusExcerpt": "<optional>", "contextParagraphsBefore": <int default 2>, "contextParagraphsAfter": <int default 2>, "complianceNotes": "<optional>", "reason": "<why>" } — creative rewrite; default 2 ¶ context each side unless you set 0.
         - { "action": "invoke_editor", ... same optional scope fields ... } — light touch-ups (tense, perspective, formatting).
         - { "action": "invoke_corrector", ... same optional scope fields ... } — grammar/punctuation.
         - { "action": "propose_patch", "paragraphStart": <int>, "paragraphEnd": <int>, "replacement": "<prose>", "reason": "<why>" } — apply your own replacement directly.
@@ -60,13 +71,19 @@ public static partial class AgenticEditLoop
         - When run_quality_check is available and required: score at or above the session threshold with no remaining fixInstructions on the CURRENT draft.
         - When an AUTHOR CORRECTION MISSION appears in the user message: finish only after you judge the mission fully implemented (state this in reason).
 
+        Word-count strategy (when Word budget shows a deficit):
+        - check_word_budget → map missing beats (check_scene_brief) → read_section full draft → break_up_scene with expand + insert_after beats (~300–450 words each).
+        - Do NOT finish while substantially below MinWordsTarget unless the scene brief explicitly requires brevity.
+
         Script strategy (multi-target fixes):
-        - Use run_script to chain localization + fix steps: find_text → swap_text, patch_text, or replace_text for several compliance items in one turn.
+        - Turn 1 MUST be planning only: read_section, find_text, query_lore, query_timeline, check_scene_brief, or run_*_check — inspect before editing.
+        - Use run_script to chain find_text → patch_text/replace_text for several verified compliance items in one turn.
         - query_timeline / query_lore whenever continuity or canon is uncertain — always allowed alongside edits.
         - On tool misuse you receive corrective hints; on unknown actions you receive the full tool list. The loop only aborts after many consecutive failures — fix your JSON and retry.
 
         Text manipulation strategy:
         - find_text → replace_text, swap_text, or patch_text for mechanical/local fixes; invoke_* when rewriting phrasing or voice.
+        - ALWAYS read_section covering ¶range before propose_patch, invoke_*, replace_text, swap_text, or patch_text on that range.
         - swap_text when two passages or phrases should trade places (e.g. reorder sentences, fix transposed phrases).
         - patch_text for insert/remove/replace around a unique excerpt without rewriting whole paragraphs.
 
@@ -89,6 +106,7 @@ public static partial class AgenticEditLoop
         - query_lore / query_timeline when unsure → read_section → fix tools or run_script → run_compliance_check → run_quality_check (when available) → finish.
         - Preserve plot-critical substance; never compress dramatized beats into summary.
         - Summarized draft view: read_section before invoke_* or propose_patch on that range.
+        - After invoke_* you receive edit_diff and delegation_verification — re-read if warnings appear.
         - Indices refer to the CURRENT draft (after prior patches in this session).
         - Review "Recent tool history" before retrying find/replace or patch_text. If a pattern returned "no matches", use find_text on the CURRENT draft for exact text — do not repeat the same failed pattern.
         """;
@@ -147,6 +165,7 @@ public static partial class AgenticEditLoop
         for (var turn = 1; turn <= maxTurns; turn++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            state.TurnsUsed = turn;
             var numbered = BuildParagraphReference(paragraphs);
             var paragraphingWarning = BuildParagraphingWarning(paragraphs);
             var user = BuildUserMessage(
@@ -265,6 +284,19 @@ public static partial class AgenticEditLoop
             logger.LogWarning("Agentic edit stopped after hitting consecutive failure limit ({Max})", maxConsecutiveFailures);
         else
             logger.LogWarning("Agentic edit stopped after {MaxTurns} turns without finish", maxTurns);
+
+        AgentSessionMetrics.LogCompletion(
+            state.RunId,
+            state.RunOptions?.SessionKind,
+            state.FinishedCleanly,
+            state.TurnsUsed,
+            maxTurns,
+            state.ComplianceCheckCount,
+            state.QualityCheckCount,
+            state.DelegationCount,
+            consecutiveFailures >= maxConsecutiveFailures,
+            JoinParagraphs(paragraphs),
+            logger);
         return JoinParagraphs(paragraphs);
     }
 
@@ -367,7 +399,15 @@ public static partial class AgenticEditLoop
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Turn {turn} of {maxTurns} (draft has {paragraphCount} paragraphs, indices 0..{Math.Max(0, paragraphCount - 1)}).");
-        sb.AppendLine();
+        if (runOptions is { MinWordsTarget: > 0 })
+        {
+            var budget = AgentWordBudget.Analyze(fullDraft, runOptions.MinWordsTarget, runOptions.MaxWordsTarget, paragraphCount);
+            sb.AppendLine($"Word budget: {budget.CurrentWords} / {budget.MinWords}–{budget.MaxWords} target" +
+                          (budget.Deficit > 0 ? $" (short by {budget.Deficit} — consider check_word_budget and break_up_scene)." : "."));
+            sb.AppendLine();
+        }
+        else
+            sb.AppendLine();
         var missionBlock = FormatUserCorrectionMissionBlock(runOptions, fullDraft);
         if (!string.IsNullOrEmpty(missionBlock))
         {
@@ -421,6 +461,20 @@ public static partial class AgenticEditLoop
         sb.AppendLine("World context:");
         sb.AppendLine(worldBlock);
         sb.AppendLine();
+        if (!string.IsNullOrWhiteSpace(runOptions?.ContinuityBriefBlock))
+        {
+            sb.AppendLine("Continuity anchor (state before this scene):");
+            sb.AppendLine(runOptions.ContinuityBriefBlock);
+            sb.AppendLine();
+        }
+
+        if (!string.IsNullOrWhiteSpace(runOptions?.StateBeforeJson) && runOptions.StateBeforeJson.Trim() is var stateJson && stateJson != "{}" && stateJson.Length > 2)
+        {
+            sb.AppendLine("State before (JSON):");
+            sb.AppendLine(stateJson);
+            sb.AppendLine();
+        }
+
         if (!string.IsNullOrWhiteSpace(runOptions?.AuthorizedCastBlock))
         {
             sb.AppendLine(runOptions.AuthorizedCastBlock);
@@ -457,7 +511,7 @@ public static partial class AgenticEditLoop
             """;
     }
 
-    private static bool IsRangeCoveredByReads(int patchStart, int patchEnd, List<(int start, int end)> reads)
+    private static bool IsRangeCoveredByReads(int patchStart, int patchEnd, IReadOnlyList<(int start, int end)> reads)
     {
         foreach (var (rs, re) in reads)
         {
@@ -516,11 +570,20 @@ public static partial class AgenticEditLoop
             return Task.FromResult(new ParagraphEditResult { ToolResult = err });
         }
 
-        if (ShouldUseSummary(paragraphs) && !IsRangeCoveredByReads(ps, pe, readRanges))
+        if (source != "break_up_scene")
         {
-            var err =
-                $"Error: summarized draft view only shows previews. On a prior turn, call read_section covering {ps}..{pe} before editing.";
-            return Task.FromResult(new ParagraphEditResult { ToolResult = err });
+            if (ShouldUseSummary(paragraphs) && !IsRangeCoveredByReads(ps, pe, readRanges))
+            {
+                var err =
+                    $"Error: summarized draft view only shows previews. On a prior turn, call read_section covering {ps}..{pe} before editing.";
+                return Task.FromResult(new ParagraphEditResult { ToolResult = err });
+            }
+
+            if (!IsRangeCoveredByReads(ps, pe, readRanges))
+            {
+                var err = RequireReadRangeError(readRanges, ps, pe, source)!;
+                return Task.FromResult(new ParagraphEditResult { ToolResult = err });
+            }
         }
 
         var replacement = LlmProseSanitizer.ProseForApplication(action.Replacement ?? "");
@@ -569,11 +632,52 @@ public static partial class AgenticEditLoop
         }
 
         appliedEditKeys.Add(patchKey);
-        readRanges.Clear();
+        if (source != "break_up_scene")
+            readRanges.Clear();
         var ok =
             $"{source} applied: replaced paragraphs {ps}..{pe}. Draft now has {paragraphs.Count} paragraphs.";
         var patchDetail = BuildProposePatchProgressDetail(ps, pe, action.Reason, originalSpan, replacement);
-        return Task.FromResult(new ParagraphEditResult { ToolResult = $"{ok}\n\n{patchDetail}" });
+        var diff = AgentEditDiff.Format(originalSpan, replacement);
+        return Task.FromResult(new ParagraphEditResult { ToolResult = $"{ok}\n\n{patchDetail}\n\n{diff}" });
+    }
+
+    private static AgentWriterInvokeRequest BuildDelegationRequest(
+        AgentEditLoopState state,
+        int paragraphStart,
+        int paragraphEnd,
+        string instruction,
+        string? complianceNotes,
+        string? focusExcerpt,
+        int? contextParagraphsBefore,
+        int? contextParagraphsAfter,
+        int? targetWords = null)
+    {
+        var paragraphs = state.Paragraphs;
+        var spanText = JoinParagraphs(paragraphs.Skip(paragraphStart).Take(paragraphEnd - paragraphStart + 1).ToList());
+        var before = Math.Clamp(contextParagraphsBefore ?? 2, 0, paragraphStart);
+        var after = Math.Clamp(contextParagraphsAfter ?? 2, 0, Math.Max(0, paragraphs.Count - 1 - paragraphEnd));
+        var contextBefore = before > 0
+            ? JoinParagraphs(paragraphs.Skip(paragraphStart - before).Take(before).ToList())
+            : "";
+        var contextAfter = after > 0
+            ? JoinParagraphs(paragraphs.Skip(paragraphEnd + 1).Take(after).ToList())
+            : "";
+        return new AgentWriterInvokeRequest
+        {
+            ParagraphStart = paragraphStart,
+            ParagraphEnd = paragraphEnd,
+            Instruction = instruction,
+            SpanText = spanText,
+            FullDraft = JoinParagraphs(paragraphs),
+            ComplianceContext = BuildDelegationComplianceContext(state.LastComplianceVerdict, complianceNotes),
+            QualityContext = BuildDelegationQualityContext(state.LastQualityVerdict, paragraphStart, paragraphEnd),
+            FocusExcerpt = focusExcerpt?.Trim() ?? "",
+            ContextParagraphsBefore = before,
+            ContextParagraphsAfter = after,
+            ContextBeforeText = contextBefore,
+            ContextAfterText = contextAfter,
+            TargetWords = targetWords
+        };
     }
 
     private static string FormatComplianceToolResult(ComplianceVerdict verdict, IReadOnlyList<string>? droppedItems = null)
@@ -630,42 +734,6 @@ public static partial class AgenticEditLoop
         return sb.ToString().TrimEnd();
     }
 
-    private static AgentWriterInvokeRequest BuildDelegationRequest(
-        IReadOnlyList<string> paragraphs,
-        int paragraphStart,
-        int paragraphEnd,
-        string instruction,
-        ComplianceVerdict? lastCompliance,
-        string? complianceNotes,
-        string? focusExcerpt,
-        int? contextParagraphsBefore,
-        int? contextParagraphsAfter)
-    {
-        var spanText = JoinParagraphs(paragraphs.Skip(paragraphStart).Take(paragraphEnd - paragraphStart + 1).ToList());
-        var before = Math.Clamp(contextParagraphsBefore ?? 0, 0, paragraphStart);
-        var after = Math.Clamp(contextParagraphsAfter ?? 0, 0, Math.Max(0, paragraphs.Count - 1 - paragraphEnd));
-        var contextBefore = before > 0
-            ? JoinParagraphs(paragraphs.Skip(paragraphStart - before).Take(before).ToList())
-            : "";
-        var contextAfter = after > 0
-            ? JoinParagraphs(paragraphs.Skip(paragraphEnd + 1).Take(after).ToList())
-            : "";
-        return new AgentWriterInvokeRequest
-        {
-            ParagraphStart = paragraphStart,
-            ParagraphEnd = paragraphEnd,
-            Instruction = instruction,
-            SpanText = spanText,
-            FullDraft = JoinParagraphs(paragraphs),
-            ComplianceContext = BuildDelegationComplianceContext(lastCompliance, complianceNotes),
-            FocusExcerpt = focusExcerpt?.Trim() ?? "",
-            ContextParagraphsBefore = before,
-            ContextParagraphsAfter = after,
-            ContextBeforeText = contextBefore,
-            ContextAfterText = contextAfter
-        };
-    }
-
     private static string BuildDelegationComplianceContext(ComplianceVerdict? lastCompliance, string? complianceNotes)
     {
         if (!string.IsNullOrWhiteSpace(complianceNotes))
@@ -678,6 +746,34 @@ public static partial class AgenticEditLoop
             sb.AppendLine($"- Violation: {v}");
         foreach (var f in lastCompliance.FixInstructions)
             sb.AppendLine($"- Fix: {f}");
+        return sb.ToString().TrimEnd();
+    }
+
+    private static string BuildDelegationQualityContext(QualityVerdict? lastQuality, int paragraphStart, int paragraphEnd)
+    {
+        if (lastQuality is null || lastQuality.FixInstructions.Count == 0)
+            return "";
+
+        var sb = new StringBuilder();
+        sb.AppendLine("From last quality check — craft fixes that may apply to this passage:");
+        var matched = false;
+        foreach (var fix in lastQuality.FixInstructions)
+        {
+            if (fix.Contains($"¶{paragraphStart}", StringComparison.Ordinal)
+                || fix.Contains($"paragraph {paragraphStart}", StringComparison.OrdinalIgnoreCase)
+                || fix.Contains($"¶{paragraphEnd}", StringComparison.Ordinal))
+            {
+                sb.AppendLine($"- Fix: {fix}");
+                matched = true;
+            }
+        }
+
+        if (!matched)
+        {
+            foreach (var fix in lastQuality.FixInstructions.Take(4))
+                sb.AppendLine($"- Fix: {fix}");
+        }
+
         return sb.ToString().TrimEnd();
     }
 

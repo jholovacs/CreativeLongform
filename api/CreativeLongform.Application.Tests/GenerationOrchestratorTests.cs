@@ -185,6 +185,7 @@ public class GenerationOrchestratorTests
         var run = await WorkflowTestData.SeedAwaitingReviewRunAsync(
             harness.Db, scene, draft, NarrativeStateTestFixtures.MaraAtKitchen);
 
+        harness.Ollama.Enqueue("""{"action":"read_section","paragraphStart":0,"paragraphEnd":0}""");
         harness.Ollama.Enqueue("""
             {"action":"propose_patch","paragraphStart":0,"paragraphEnd":0,"replacement":"Mara paced the kitchen, restless.","reason":"Make her restless while pacing."}
             """);

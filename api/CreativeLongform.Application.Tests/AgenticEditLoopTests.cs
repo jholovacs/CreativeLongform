@@ -1,4 +1,5 @@
 using CreativeLongform.Application.Abstractions;
+using CreativeLongform.Application.Agent;
 using CreativeLongform.Application.Generation;
 using CreativeLongform.Application.Services;
 using CreativeLongform.Domain.Entities;
@@ -130,7 +131,8 @@ public class AgenticEditLoopTests
                 calls++;
                 return Task.FromResult(calls switch
                 {
-                    1 => ("""{"action":"propose_patch","paragraphStart":0,"paragraphEnd":0,"replacement":"New."}""", "", Guid.Empty),
+                    1 => ("""{"action":"read_section","paragraphStart":0,"paragraphEnd":0}""", "", Guid.Empty),
+                    2 => ("""{"action":"propose_patch","paragraphStart":0,"paragraphEnd":0,"replacement":"New."}""", "", Guid.Empty),
                     _ => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty)
                 });
             },
@@ -141,7 +143,7 @@ public class AgenticEditLoopTests
 
         Assert.Contains("New.", result, StringComparison.Ordinal);
         Assert.Contains("Keep.", result, StringComparison.Ordinal);
-        Assert.Equal(2, calls);
+        Assert.Equal(3, calls);
     }
 
     [Fact]
@@ -195,14 +197,16 @@ public class AgenticEditLoopTests
             "instr",
             null,
             "world",
-            maxTurns: 6,
+            maxTurns: 8,
             NullLogger.Instance,
             (_, _, _) =>
             {
                 calls++;
                 return Task.FromResult(calls switch
                 {
-                    <= 2 => (patch, "", Guid.Empty),
+                    1 => ("""{"action":"read_section","paragraphStart":0,"paragraphEnd":0}""", "", Guid.Empty),
+                    2 => (patch, "", Guid.Empty),
+                    3 => (patch, "", Guid.Empty),
                     _ => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty)
                 });
             },
@@ -211,7 +215,7 @@ public class AgenticEditLoopTests
             () => 0L,
             CancellationToken.None);
 
-        Assert.Equal(3, calls);
+        Assert.Equal(4, calls);
     }
 
     [Fact]
@@ -223,15 +227,14 @@ public class AgenticEditLoopTests
             "instr",
             null,
             "world",
-            maxTurns: 5,
+            maxTurns: 6,
             NullLogger.Instance,
             (_, _, _) =>
             {
                 calls++;
                 return Task.FromResult(calls switch
                 {
-                    1 => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty),
-                    2 => ("""{"action":"run_compliance_check"}""", "", Guid.Empty),
+                    1 => ("""{"action":"read_section","paragraphStart":0,"paragraphEnd":0}""", "", Guid.Empty),
                     _ => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty)
                 });
             },
@@ -249,7 +252,7 @@ public class AgenticEditLoopTests
                 })
             });
 
-        Assert.Equal(3, calls);
+        Assert.Equal(2, calls);
         Assert.Equal("Hello.", result);
     }
 
@@ -262,15 +265,14 @@ public class AgenticEditLoopTests
             "instr",
             null,
             "world",
-            maxTurns: 4,
+            maxTurns: 5,
             NullLogger.Instance,
             (_, _, _) =>
             {
                 calls++;
                 return Task.FromResult(calls switch
                 {
-                    1 => ("""{"action":"run_compliance_check"}""", "", Guid.Empty),
-                    2 => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty),
+                    1 => ("""{"action":"read_section","paragraphStart":0,"paragraphEnd":0}""", "", Guid.Empty),
                     _ => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty)
                 });
             },
@@ -288,7 +290,7 @@ public class AgenticEditLoopTests
                 })
             });
 
-        Assert.Equal(4, calls);
+        Assert.Equal(5, calls);
     }
 
     [Fact]
@@ -307,7 +309,8 @@ public class AgenticEditLoopTests
                 calls++;
                 return Task.FromResult(calls switch
                 {
-                    1 => ("""
+                    1 => ("""{"action":"read_section","paragraphStart":0,"paragraphEnd":1}""", "", Guid.Empty),
+                    2 => ("""
                         {
                           "action": "run_script",
                           "reason": "mechanical fixes",
@@ -325,7 +328,7 @@ public class AgenticEditLoopTests
             () => 0L,
             CancellationToken.None);
 
-        Assert.Equal(2, calls);
+        Assert.Equal(3, calls);
         Assert.Contains("One beta.", result, StringComparison.Ordinal);
         Assert.Contains("Two delta.", result, StringComparison.Ordinal);
     }
@@ -403,12 +406,13 @@ public class AgenticEditLoopTests
             (_, user, _) =>
             {
                 calls++;
-                if (calls == 2)
+                if (calls == 3)
                     secondUserMessage = user;
                 return Task.FromResult(calls switch
                 {
-                    1 => ("""{"action":"replace_text","pattern":"missing phrase","replacement":"x"}""", "", Guid.Empty),
-                    2 => ("""{"action":"read_section","paragraphStart":0,"paragraphEnd":0}""", "", Guid.Empty),
+                    1 => ("""{"action":"read_section","paragraphStart":0,"paragraphEnd":0}""", "", Guid.Empty),
+                    2 => ("""{"action":"replace_text","pattern":"missing phrase","replacement":"x"}""", "", Guid.Empty),
+                    3 => ("""{"action":"read_section","paragraphStart":0,"paragraphEnd":0}""", "", Guid.Empty),
                     _ => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty)
                 });
             },
@@ -422,6 +426,55 @@ public class AgenticEditLoopTests
         Assert.Contains("Recent tool history", secondUserMessage, StringComparison.Ordinal);
         Assert.Contains("missing phrase", secondUserMessage, StringComparison.Ordinal);
         Assert.Contains("no matches", secondUserMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunAsync_break_up_scene_delegates_writer_per_beat()
+    {
+        var writerCalls = new List<AgentWriterInvokeRequest>();
+        var calls = 0;
+        var result = await AgenticEditLoop.RunAsync(
+            "Thin opening.\n\nThin middle.",
+            "Scene brief.",
+            null,
+            "",
+            maxTurns: 5,
+            NullLogger.Instance,
+            (_, _, _) =>
+            {
+                calls++;
+                return Task.FromResult(calls switch
+                {
+                    1 => ("""{"action":"read_section","paragraphStart":0,"paragraphEnd":1}""", "", Guid.Empty),
+                    2 => ("""
+                        {"action":"break_up_scene","reason":"below word target","beats":[
+                          {"mode":"expand","paragraphStart":0,"paragraphEnd":0,"instruction":"Deepen opening.","targetWords":400},
+                          {"mode":"insert_after","afterParagraph":1,"instruction":"Add closing beat.","targetWords":350}
+                        ]}
+                        """, "", Guid.Empty),
+                    _ => ("""{"action":"finish","reason":"expanded"}""", "", Guid.Empty)
+                });
+            },
+            new NoopNotifier(),
+            Guid.NewGuid(),
+            () => 0L,
+            CancellationToken.None,
+            new AgentEditRunOptions
+            {
+                MinWordsTarget = 1500,
+                MaxWordsTarget = 2000,
+                InvokeWriterAsync = (req, _) =>
+                {
+                    writerCalls.Add(req);
+                    return Task.FromResult(string.Join(' ', Enumerable.Repeat("word", req.TargetWords ?? 100)));
+                },
+                RunComplianceAsync = (_, _) => Task.FromResult(new ComplianceVerdict { Pass = true })
+            });
+
+        Assert.Equal(2, writerCalls.Count);
+        Assert.Contains(400, writerCalls.Select(c => c.TargetWords));
+        Assert.Contains(350, writerCalls.Select(c => c.TargetWords));
+        Assert.True(AgentWordBudget.CountWords(result) > AgentWordBudget.CountWords("Thin opening.\n\nThin middle."));
     }
 
     private sealed class NoopNotifier : IGenerationProgressNotifier

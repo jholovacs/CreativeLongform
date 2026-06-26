@@ -232,6 +232,7 @@ public sealed class CreativeLongformDbContext : DbContext, ICreativeLongformDbCo
             e.HasKey(x => x.Id);
             e.Property(x => x.WriterModel).HasMaxLength(256);
             e.Property(x => x.CriticModel).HasMaxLength(256);
+            e.Property(x => x.QualityCriticModel).HasMaxLength(256);
             e.Property(x => x.AgentModel).HasMaxLength(256);
             e.Property(x => x.WorldBuildingModel).HasMaxLength(256);
             e.Property(x => x.PreStateModel).HasMaxLength(256);

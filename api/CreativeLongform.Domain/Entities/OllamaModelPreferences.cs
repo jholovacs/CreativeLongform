@@ -10,8 +10,11 @@ public sealed class OllamaModelPreferences
     /// <summary>Creative prose: draft, expansion passes.</summary>
     public string? WriterModel { get; set; }
 
-    /// <summary>Compliance, quality, transition checks, repair passes.</summary>
+    /// <summary>Compliance, transition checks, repair passes.</summary>
     public string? CriticModel { get; set; }
+
+    /// <summary>Prose quality scoring in agent loop and pipeline. Null = use <see cref="CriticModel"/>.</summary>
+    public string? QualityCriticModel { get; set; }
 
     /// <summary>Agentic edit loop (JSON tools). Null = use writer effective model.</summary>
     public string? AgentModel { get; set; }

@@ -15,6 +15,7 @@ public interface IOllamaModelPreferencesService
 
     Task<string> GetWriterModelAsync(CancellationToken cancellationToken = default);
     Task<string> GetCriticModelAsync(CancellationToken cancellationToken = default);
+    Task<string> GetQualityCriticModelAsync(CancellationToken cancellationToken = default);
     Task<string> GetAgentModelAsync(CancellationToken cancellationToken = default);
     Task<string> GetWorldBuildingModelAsync(CancellationToken cancellationToken = default);
     Task<string> GetPreStateModelAsync(CancellationToken cancellationToken = default);
@@ -28,6 +29,7 @@ public sealed class OllamaModelAssignmentsDto
 {
     public string WriterModel { get; init; } = "";
     public string CriticModel { get; init; } = "";
+    public string QualityCriticModel { get; init; } = "";
     public string AgentModel { get; init; } = "";
     public string WorldBuildingModel { get; init; } = "";
     public string PreStateModel { get; init; } = "";
@@ -41,6 +43,7 @@ public sealed class OllamaModelAssignmentsPatch
 {
     public string? WriterModel { get; set; }
     public string? CriticModel { get; set; }
+    public string? QualityCriticModel { get; set; }
     public string? AgentModel { get; set; }
     public string? WorldBuildingModel { get; set; }
     public string? PreStateModel { get; set; }
@@ -49,6 +52,7 @@ public sealed class OllamaModelAssignmentsPatch
     /// <summary>When true, clear DB override for that slot (fall back to appsettings).</summary>
     public bool? ClearWriter { get; set; }
     public bool? ClearCritic { get; set; }
+    public bool? ClearQualityCritic { get; set; }
     public bool? ClearAgent { get; set; }
     public bool? ClearWorldBuilding { get; set; }
     public bool? ClearPreState { get; set; }

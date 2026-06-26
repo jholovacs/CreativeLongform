@@ -4,6 +4,7 @@ using System.Text;
 using System.Net.Http;
 using System.Text.Json;
 using CreativeLongform.Application.Abstractions;
+using CreativeLongform.Application.Agent;
 using CreativeLongform.Application.Generation;
 using CreativeLongform.Application.Narrative;
 using CreativeLongform.Application.Options;
@@ -612,31 +613,22 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         var authorizedCastBlock = BuildAuthorizedCastBlock(stateBeforeJson, worldElements, scene);
 
         var critic = await modelPrefs.GetCriticModelAsync(cancellationToken);
+        var qualityCritic = await modelPrefs.GetQualityCriticModelAsync(cancellationToken);
         var correctionModel = EffectiveCorrectionModel(critic);
         var editor = await modelPrefs.GetEditorModelAsync(cancellationToken);
         var agentModel = await modelPrefs.GetAgentModelAsync(cancellationToken);
-        var agentTurns = Math.Max(1, _ollamaOptions.Value.AgenticEditMaxTurns);
+        var (qualityReviewMin, qualityAcceptMin) = GetQualityScoreThresholds(run);
+        var sceneInstructions = SceneInstructionsForAgent(scene);
+        var paragraphCount = AgenticEditLoop.SplitParagraphs(draft).Count;
+        var (sessionMinWords, sessionMaxWords) = ResolveSessionWordTargets(run);
+        var agentTurns = AgentSessionFactory.ComputeMaxTurns(_ollamaOptions.Value, paragraphCount);
         var agentPredict = Math.Max(512, _ollamaOptions.Value.AgenticEditNumPredict);
-        var (qualityReviewMin, _) = GetQualityScoreThresholds(run);
 
-        var bookElements = await db.WorldElements.AsNoTracking()
-            .Where(e => e.BookId == book.Id)
-            .ToListAsync(cancellationToken);
-        var bookElementIds = bookElements.Select(e => e.Id).ToHashSet();
-        var bookLinks = await db.WorldElementLinks.AsNoTracking()
-            .Where(l => bookElementIds.Contains(l.FromWorldElementId) && bookElementIds.Contains(l.ToWorldElementId))
-            .ToListAsync(cancellationToken);
-        var bookScenes = await db.Scenes.AsNoTracking()
-            .Where(s => s.Chapter.BookId == book.Id)
-            .Include(s => s.Chapter)
-            .Include(s => s.TimelineEntry)
-            .OrderBy(s => s.Chapter!.Order)
-            .ThenBy(s => s.Order)
-            .ToListAsync(cancellationToken);
-        var lore = AgentLoreCatalog.Create(book, worldElements, scopedLinks, bookElements, bookLinks);
+        var bookContext = await AgentBookContextLoader.LoadAsync(
+            db, book, scene, worldElements, scopedLinks, cancellationToken);
 
         await notifier.NotifyAsync(generationRunId, "StepStarted", nameof(PipelineStep.AgentEdit),
-            $"Correct With LLM: agent planning and applying «{ins}» (model «{agentModel}»).", cancellationToken,
+            $"Correct With LLM: agent planning and applying «{ins}» (model «{agentModel}», up to {agentTurns} turns).", cancellationToken,
             correctSw.ElapsedMilliseconds, null, null);
 
         const int workingDocRevision = 1;
@@ -644,41 +636,35 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             notifier, generationRunId, workingDocRevision, draft,
             "Correction session opened (current draft)", correctProgress.ElapsedMs, cancellationToken);
 
-        var agentOptions = new AgentEditRunOptions
+        var agentOptions = AgentSessionFactory.Build(new AgentSessionBuildRequest
         {
+            Kind = AgentSessionKind.AuthorCorrection,
+            OllamaOptions = _ollamaOptions.Value,
             StateBeforeJson = stateBeforeJson,
             AuthorizedCastBlock = authorizedCastBlock,
-            Lore = lore,
-            Timeline = AgentSceneContextCatalog.Create(book, scene, bookScenes),
+            BookContext = bookContext,
             BookDirectiveBlock = AgentBookDirectives.Format(book),
+            SceneInstructionsBlock = sceneInstructions,
+            NarrativePerspective = scene.NarrativePerspective,
+            NarrativeTense = scene.NarrativeTense,
+            ExpectedEndNotes = scene.ExpectedEndStateNotes,
+            ParagraphCount = paragraphCount,
+            InitialWorkingDocumentRevision = workingDocRevision,
+            SkipQualityGate = false,
+            QualityReviewMinScore = qualityReviewMin,
+            QualityAcceptMinScore = qualityAcceptMin,
+            MinWordsTarget = sessionMinWords,
+            MaxWordsTarget = sessionMaxWords,
             UserCorrectionMission = ins,
             SelectionStart = selectionStart,
             SelectionEnd = selectionEnd,
-            InitialWorkingDocumentRevision = workingDocRevision,
-            MaxComplianceChecks = Math.Max(1, _ollamaOptions.Value.AgenticEditMaxComplianceChecks),
-            MaxQualityChecks = Math.Max(1, _ollamaOptions.Value.AgenticEditMaxQualityChecks),
-            MaxConsecutiveToolFailures = Math.Max(1, _ollamaOptions.Value.AgenticEditMaxConsecutiveFailures),
-            QualityReviewMinScore = qualityReviewMin,
-            RequireQualityBeforeFinish = _ollamaOptions.Value.QualityGateEnabled,
-            RunComplianceAsync = (draftText, ct) =>
-                EvaluateComplianceVerdictAsync(db, ollama, critic, run.Id, scene, stateBeforeJson, draftText, worldBlock,
-                    authorizedCastBlock, correctProgress, ct),
-            RunQualityAsync = _ollamaOptions.Value.QualityGateEnabled
-                ? (draftText, ct) =>
-                    EvaluateQualityVerdictAsync(db, ollama, critic, run.Id, scene, stateBeforeJson, draftText, worldBlock,
-                        correctProgress, ct)
-                : null,
-            InvokeWriterAsync = (req, ct) =>
-                InvokeAgentWriterParagraphAsync(db, ollama, writer, run, scene, stateBeforeJson, worldBlock, req, correctProgress, ct),
-            InvokeCorrectorAsync = (req, ct) =>
-                InvokeAgentCorrectorParagraphAsync(db, ollama, correctionModel, run, scene, req, correctProgress, ct),
-            InvokeEditorAsync = (req, ct) =>
-                InvokeAgentEditorParagraphAsync(db, ollama, editor, run, scene, stateBeforeJson, worldBlock, req, correctProgress, ct)
-        };
+            Delegates = BuildAgentDelegates(db, ollama, writer, critic, qualityCritic, correctionModel, editor, run, scene,
+                stateBeforeJson, worldBlock, authorizedCastBlock, correctProgress)
+        });
 
         var text = await AgenticEditLoop.RunAsync(
             draft,
-            SceneInstructionsForAgent(scene),
+            sceneInstructions,
             scene.ExpectedEndStateNotes,
             worldBlock,
             agentTurns,
@@ -722,6 +708,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         var modelPrefs = scope.ServiceProvider.GetRequiredService<IOllamaModelPreferencesService>();
         var writer = await modelPrefs.GetWriterModelAsync(cancellationToken);
         var critic = await modelPrefs.GetCriticModelAsync(cancellationToken);
+        var qualityCritic = await modelPrefs.GetQualityCriticModelAsync(cancellationToken);
         var correctionModel = EffectiveCorrectionModel(critic);
         var editor = await modelPrefs.GetEditorModelAsync(cancellationToken);
         var agentModel = await modelPrefs.GetAgentModelAsync(cancellationToken);
@@ -784,46 +771,39 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             if (_ollamaOptions.Value.AgenticEditEnabled && _ollamaOptions.Value.AgenticEditMaxTurns > 0)
             {
                 await NotifyStepAsync(notifier, runId, PipelineStep.AgentEdit, progress.ElapsedMs,
-                    "Agent edit: orchestrator loop (lore lookup, compliance, writer/editor/corrector delegation, targeted patches).", cancellationToken);
-                var agentTurns = Math.Max(1, _ollamaOptions.Value.AgenticEditMaxTurns);
+                    "Agent edit: orchestrator loop (planning, beat checklist, compliance, writer/editor/corrector delegation, verification).", cancellationToken);
+                var sceneInstructions = SceneInstructionsForAgent(scene);
+                var paragraphCount = AgenticEditLoop.SplitParagraphs(draft).Count;
+                var agentTurns = AgentSessionFactory.ComputeMaxTurns(_ollamaOptions.Value, paragraphCount);
                 var agentPredict = Math.Max(512, _ollamaOptions.Value.AgenticEditNumPredict);
-                var bookElements = await db.WorldElements.AsNoTracking()
-                    .Where(e => e.BookId == book.Id)
-                    .ToListAsync(cancellationToken);
-                var bookElementIds = bookElements.Select(e => e.Id).ToHashSet();
-                var bookLinks = await db.WorldElementLinks.AsNoTracking()
-                    .Where(l => bookElementIds.Contains(l.FromWorldElementId) && bookElementIds.Contains(l.ToWorldElementId))
-                    .ToListAsync(cancellationToken);
-                var bookScenes = await db.Scenes.AsNoTracking()
-                    .Where(s => s.Chapter.BookId == book.Id)
-                    .Include(s => s.Chapter)
-                    .Include(s => s.TimelineEntry)
-                    .OrderBy(s => s.Chapter!.Order)
-                    .ThenBy(s => s.Order)
-                    .ToListAsync(cancellationToken);
-                var lore = AgentLoreCatalog.Create(book, worldElements, scopedLinks, bookElements, bookLinks);
-                var agentOptions = new AgentEditRunOptions
+                var (pipelineQualityReviewMin, pipelineQualityAcceptMin) = GetQualityScoreThresholds(run);
+                var bookContext = await AgentBookContextLoader.LoadAsync(
+                    db, book, scene, worldElements, scopedLinks, cancellationToken);
+                var agentOptions = AgentSessionFactory.Build(new AgentSessionBuildRequest
                 {
+                    Kind = AgentSessionKind.PipelinePostDraft,
+                    OllamaOptions = _ollamaOptions.Value,
                     StateBeforeJson = stateBefore,
                     AuthorizedCastBlock = authorizedCastBlock,
-                    Lore = lore,
-                    MaxComplianceChecks = Math.Max(1, _ollamaOptions.Value.AgenticEditMaxComplianceChecks),
-                    MaxConsecutiveToolFailures = Math.Max(1, _ollamaOptions.Value.AgenticEditMaxConsecutiveFailures),
+                    BookContext = bookContext,
                     BookDirectiveBlock = AgentBookDirectives.Format(book),
-                    Timeline = AgentSceneContextCatalog.Create(book, scene, bookScenes),
+                    SceneInstructionsBlock = sceneInstructions,
+                    NarrativePerspective = scene.NarrativePerspective,
+                    NarrativeTense = scene.NarrativeTense,
+                    ExpectedEndNotes = scene.ExpectedEndStateNotes,
+                    ParagraphCount = paragraphCount,
                     InitialWorkingDocumentRevision = workingDocRevision,
-                    RunComplianceAsync = (draftText, ct) =>
-                        EvaluateComplianceVerdictAsync(db, ollama, critic, run.Id, scene, stateBefore, draftText, worldBlock, authorizedCastBlock, progress, ct),
-                    InvokeWriterAsync = (req, ct) =>
-                        InvokeAgentWriterParagraphAsync(db, ollama, writer, run, scene, stateBefore, worldBlock, req, progress, ct),
-                    InvokeCorrectorAsync = (req, ct) =>
-                        InvokeAgentCorrectorParagraphAsync(db, ollama, correctionModel, run, scene, req, progress, ct),
-                    InvokeEditorAsync = (req, ct) =>
-                        InvokeAgentEditorParagraphAsync(db, ollama, editor, run, scene, stateBefore, worldBlock, req, progress, ct)
-                };
+                    SkipQualityGate = run.SkipQualityGate,
+                    QualityReviewMinScore = pipelineQualityReviewMin,
+                    QualityAcceptMinScore = pipelineQualityAcceptMin,
+                    MinWordsTarget = minWords,
+                    MaxWordsTarget = maxTargetWords,
+                    Delegates = BuildAgentDelegates(db, ollama, writer, critic, qualityCritic, correctionModel, editor, run, scene,
+                        stateBefore, worldBlock, authorizedCastBlock, progress)
+                });
                 draft = await AgenticEditLoop.RunAsync(
                     draft,
-                    SceneInstructionsForAgent(scene),
+                    sceneInstructions,
                     scene.ExpectedEndStateNotes,
                     worldBlock,
                     agentTurns,
@@ -861,6 +841,8 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
             var text = ApplyLlmDraftFromModel(scene, draft);
 
+            var (reviewMin, acceptMin) = GetQualityScoreThresholds(run);
+
             await NotifyStepAsync(notifier, runId, PipelineStep.Compliance, progress.ElapsedMs,
                 "Compliance: checking scene instructions, narrative voice, grammar/punctuation, and world context.", cancellationToken);
             var lastCompliance = await EvaluateComplianceAsync(db, ollama, critic, run, scene, stateBefore, text, worldBlock, authorizedCastBlock, progress, cancellationToken);
@@ -874,10 +856,9 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             QualityVerdict? lastQuality = null;
             if (!run.SkipQualityGate)
             {
-                var (reviewMin, acceptMin) = GetQualityScoreThresholds(run);
                 await NotifyStepAsync(notifier, runId, PipelineStep.Quality, progress.ElapsedMs,
-                    $"Quality: numeric prose score (pass ≥{reviewMin:0.#}; no automated repair ≥{acceptMin:0.#}).", cancellationToken);
-                lastQuality = await EvaluateQualityAsync(db, ollama, critic, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
+                    $"Quality: numeric prose score (pass ≥{reviewMin:0.#}; polish target ≥{acceptMin:0.#}).", cancellationToken);
+                lastQuality = await EvaluateQualityAsync(db, ollama, qualityCritic, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
                 var q = lastQuality.Score ?? 0;
                 if (q < reviewMin)
                 {
@@ -890,6 +871,65 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             {
                 await NotifyStepAsync(notifier, runId, PipelineStep.Quality, progress.ElapsedMs,
                     "Quality gate skipped (configuration or request).", cancellationToken);
+            }
+
+            if (_ollamaOptions.Value.AgenticRepassEnabled
+                && _ollamaOptions.Value.AgenticEditEnabled
+                && _ollamaOptions.Value.AgenticEditMaxTurns > 0
+                && (!lastCompliance.Pass || (lastQuality is not null && (lastQuality.Score ?? 0) < reviewMin)))
+            {
+                await NotifyStepAsync(notifier, runId, PipelineStep.AgentEdit, progress.ElapsedMs,
+                    "Agent remediation: terminal compliance or quality failed — running a focused second agent pass.", cancellationToken);
+                var remediationMission = BuildRemediationMission(lastCompliance, lastQuality, reviewMin);
+                var repassParagraphCount = AgenticEditLoop.SplitParagraphs(text).Count;
+                var repassTurns = AgentSessionFactory.ComputeMaxTurns(_ollamaOptions.Value, repassParagraphCount);
+                var repassOptions = AgentSessionFactory.Build(new AgentSessionBuildRequest
+                {
+                    Kind = AgentSessionKind.AuthorCorrection,
+                    OllamaOptions = _ollamaOptions.Value,
+                    StateBeforeJson = stateBefore,
+                    AuthorizedCastBlock = authorizedCastBlock,
+                    BookContext = await AgentBookContextLoader.LoadAsync(db, book, scene, worldElements, scopedLinks, cancellationToken),
+                    BookDirectiveBlock = AgentBookDirectives.Format(book),
+                    SceneInstructionsBlock = SceneInstructionsForAgent(scene),
+                    NarrativePerspective = scene.NarrativePerspective,
+                    NarrativeTense = scene.NarrativeTense,
+                    ExpectedEndNotes = scene.ExpectedEndStateNotes,
+                    ParagraphCount = repassParagraphCount,
+                    InitialWorkingDocumentRevision = workingDocRevision + 1,
+                    SkipQualityGate = run.SkipQualityGate,
+                    QualityReviewMinScore = reviewMin,
+                    QualityAcceptMinScore = acceptMin,
+                    MinWordsTarget = minWords,
+                    MaxWordsTarget = maxTargetWords,
+                    UserCorrectionMission = remediationMission,
+                    Delegates = BuildAgentDelegates(db, ollama, writer, critic, qualityCritic, correctionModel, editor, run, scene,
+                        stateBefore, worldBlock, authorizedCastBlock, progress)
+                });
+                text = await AgenticEditLoop.RunAsync(
+                    text,
+                    SceneInstructionsForAgent(scene),
+                    scene.ExpectedEndStateNotes,
+                    worldBlock,
+                    repassTurns,
+                    _logger,
+                    async (system, user, ct) =>
+                    {
+                        var o = new OllamaChatOptions { NumPredict = Math.Max(512, _ollamaOptions.Value.AgenticEditNumPredict) };
+                        return await ChatAndLogForRunAsync(db, ollama, agentModel, run.Id, PipelineStep.AgentEdit, system, user,
+                            jsonFormat: true, o, ct, progress, "Agent remediation pass (JSON tools)");
+                    },
+                    notifier,
+                    runId,
+                    progress.ElapsedMs,
+                    cancellationToken,
+                    repassOptions);
+                text = GuardDraftProse(text, runId, "agent remediation", stateBefore);
+                text = ApplyLlmDraftFromModel(scene, text);
+
+                lastCompliance = await EvaluateComplianceAsync(db, ollama, critic, run, scene, stateBefore, text, worldBlock, authorizedCastBlock, progress, cancellationToken);
+                if (!run.SkipQualityGate)
+                    lastQuality = await EvaluateQualityAsync(db, ollama, qualityCritic, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
             }
 
             run.FinalDraftText = text;
@@ -1875,12 +1915,11 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         CancellationToken cancellationToken)
     {
         var raw = await EvaluateComplianceVerdictAsync(db, ollama, model, run.Id, scene, stateBefore, draft, worldContextBlock, authorizedCastBlock, progress, cancellationToken);
-        var grounded = ComplianceVerdictGrounding.GroundAgainstDraft(draft, raw);
-        if (grounded.DroppedItems.Count > 0)
+        var processed = AgentVerification.ProcessCompliance(draft, raw, BuildAgentGuardContext(scene, stateBefore));
+        if (processed.DroppedItems.Count > 0)
             _logger.LogInformation("Compliance grounding dropped {Count} critic item(s) not evidenced in draft for run {RunId}",
-                grounded.DroppedItems.Count, run.Id);
-        var verdict = LanguageContextShiftDetector.MergeIntoCompliance(grounded.Verdict,
-            LanguageContextShiftDetector.Analyze(draft));
+                processed.DroppedItems.Count, run.Id);
+        var verdict = processed.Verdict;
         await db.ComplianceEvaluations.AddAsync(new ComplianceEvaluation
         {
             Id = Guid.NewGuid(),
@@ -1998,11 +2037,12 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             ---
             {req.SpanText}
             ---
-            {FormatAgentDelegationScopeBlock(req)}
+            {(req.TargetWords is > 0 ? $"Approximate word target for this passage: {req.TargetWords} words.\n" : "")}{FormatAgentDelegationScopeBlock(req)}
 
             Editor instruction for this passage:
             {req.Instruction}
             {FormatAgentDelegationComplianceBlock(req)}
+            {FormatAgentDelegationQualityBlock(req)}
 
             {worldContextBlock}
             """;
@@ -2048,6 +2088,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             Correction focus from the editor (apply these fixes; change nothing else):
             {req.Instruction}
             {FormatAgentDelegationComplianceBlock(req)}
+            {FormatAgentDelegationQualityBlock(req)}
             """;
         var (text, _, _) = await ChatAndLogForRunAsync(db, ollama, model, run.Id, PipelineStep.AgentEdit, system, user,
             jsonFormat: false, options, cancellationToken: cancellationToken, progress,
@@ -2101,6 +2142,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             Editor instruction for this passage (address the author's or compliance fix request precisely):
             {req.Instruction}
             {FormatAgentDelegationComplianceBlock(req)}
+            {FormatAgentDelegationQualityBlock(req)}
 
             {worldContextBlock}
             """;
@@ -2166,8 +2208,82 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             : LlmJson.Deserialize<QualityVerdict>(textOrNull)
               ?? new QualityVerdict { Issues = new List<string>(), FixInstructions = new List<string>() };
         verdict = NormalizeQualityVerdict(verdict);
-        return LanguageContextShiftDetector.MergeIntoQuality(verdict, LanguageContextShiftDetector.Analyze(draft));
+        return AgentVerification.ProcessQuality(draft, verdict, BuildAgentGuardContext(scene, stateBefore));
     }
+
+    private (int MinWords, int MaxWords) ResolveSessionWordTargets(GenerationRun run) =>
+        ResolveSessionWordTargetsFromOverrides(run.MinWordsOverride, run.MaxWordsOverride);
+
+    private (int MinWords, int MaxWords) ResolveSessionWordTargetsFromOverrides(int? minOverride, int? maxOverride)
+    {
+        var minWords = Math.Max(100, minOverride ?? _ollamaOptions.Value.DraftMinWords);
+        var defaultMax = Math.Min(2000, Math.Max(minWords, 1500));
+        var maxTarget = maxOverride ?? defaultMax;
+        if (maxTarget < minWords)
+            maxTarget = minWords;
+        return (minWords, maxTarget);
+    }
+
+    private static string BuildRemediationMission(ComplianceVerdict compliance, QualityVerdict? quality, double reviewMin)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("REMEDIATION PASS — the pipeline terminal gate failed after the initial agent session.");
+        sb.AppendLine("Fix every outstanding item below. Use check_scene_brief, read_section, find_text, then targeted edits.");
+        if (!compliance.Pass)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Compliance failures:");
+            foreach (var v in compliance.Violations)
+                sb.AppendLine($"  • {v}");
+            foreach (var f in compliance.FixInstructions)
+                sb.AppendLine($"  → {f}");
+        }
+
+        if (quality is not null && (quality.Score ?? 0) < reviewMin)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"Quality score {quality.Score:0} (need ≥{reviewMin:0}):");
+            foreach (var issue in quality.Issues)
+                sb.AppendLine($"  • {issue}");
+            foreach (var f in quality.FixInstructions)
+                sb.AppendLine($"  → {f}");
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private static AgentDeterministicGuards.GuardContext BuildAgentGuardContext(Scene scene, string stateBeforeJson) =>
+        new(scene.NarrativePerspective, scene.NarrativeTense, scene.ExpectedEndStateNotes, stateBeforeJson);
+
+    private AgentSessionDelegates BuildAgentDelegates(
+        ICreativeLongformDbContext db,
+        IOllamaClient ollama,
+        string writer,
+        string critic,
+        string qualityCritic,
+        string correctionModel,
+        string editor,
+        GenerationRun run,
+        Scene scene,
+        string stateBeforeJson,
+        string worldBlock,
+        string authorizedCastBlock,
+        PipelineProgress? progress) =>
+        new()
+        {
+            RunComplianceAsync = (draftText, ct) =>
+                EvaluateComplianceVerdictAsync(db, ollama, critic, run.Id, scene, stateBeforeJson, draftText, worldBlock,
+                    authorizedCastBlock, progress, ct),
+            RunQualityAsync = (draftText, ct) =>
+                EvaluateQualityVerdictAsync(db, ollama, qualityCritic, run.Id, scene, stateBeforeJson, draftText, worldBlock,
+                    progress, ct),
+            InvokeWriterAsync = (req, ct) =>
+                InvokeAgentWriterParagraphAsync(db, ollama, writer, run, scene, stateBeforeJson, worldBlock, req, progress, ct),
+            InvokeCorrectorAsync = (req, ct) =>
+                InvokeAgentCorrectorParagraphAsync(db, ollama, correctionModel, run, scene, req, progress, ct),
+            InvokeEditorAsync = (req, ct) =>
+                InvokeAgentEditorParagraphAsync(db, ollama, editor, run, scene, stateBeforeJson, worldBlock, req, progress, ct)
+        };
 
     private async Task<QualityVerdict> EvaluateQualityAsync(
         ICreativeLongformDbContext db,
@@ -2236,6 +2352,17 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
             Compliance context (mandatory — address every item that applies to this passage):
             {req.ComplianceContext.Trim()}
+            """;
+    }
+
+    private static string FormatAgentDelegationQualityBlock(AgentWriterInvokeRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.QualityContext))
+            return "";
+        return $"""
+
+            Quality craft context (address items that apply to this passage):
+            {req.QualityContext.Trim()}
             """;
     }
 

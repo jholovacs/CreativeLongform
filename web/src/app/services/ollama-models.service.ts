@@ -18,6 +18,8 @@ export interface OllamaModelAssignmentsDto {
   writerModel: string;
   /** Quality / compliance pass model. */
   criticModel: string;
+  /** Prose craft quality critic (optional; falls back to critic). */
+  qualityCriticModel: string;
   /** Agentic edit loop model. */
   agentModel: string;
   /** World-building extraction and glossary passes. */
@@ -80,6 +82,7 @@ export interface OllamaTestConnectionResponse {
 export interface OllamaModelAssignmentsPatch {
   writerModel?: string | null;
   criticModel?: string | null;
+  qualityCriticModel?: string | null;
   agentModel?: string | null;
   worldBuildingModel?: string | null;
   preStateModel?: string | null;
@@ -88,6 +91,7 @@ export interface OllamaModelAssignmentsPatch {
   /** When true, server clears writer override. */
   clearWriter?: boolean;
   clearCritic?: boolean;
+  clearQualityCritic?: boolean;
   clearAgent?: boolean;
   clearWorldBuilding?: boolean;
   clearPreState?: boolean;

@@ -71,6 +71,12 @@ public sealed class OllamaOptions
     /// <summary>Abort agent edit loop after this many consecutive tool/JSON failures.</summary>
     public int AgenticEditMaxConsecutiveFailures { get; set; } = 5;
 
+    /// <summary>When terminal compliance or quality fails after the agent, run a remediation agent pass.</summary>
+    public bool AgenticRepassEnabled { get; set; } = true;
+
+    /// <summary>Prose quality critic when DB preference is unset; null means use <see cref="CriticModel"/>.</summary>
+    public string? QualityCriticModel { get; set; }
+
     /// <summary>When false, the prose quality critic loop is skipped for all runs (compliance still runs). Per-run override: GenerationStartOptions.SkipQualityGate.</summary>
     public bool QualityGateEnabled { get; set; } = true;
 

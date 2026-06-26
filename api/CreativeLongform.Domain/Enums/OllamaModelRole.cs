@@ -15,5 +15,8 @@ public enum OllamaModelRole
     Connection = 6,
 
     /// <summary>Light prose touch-ups: tense/perspective shifts, formatting, user-specified decoration.</summary>
-    Editor = 7
+    Editor = 7,
+
+    /// <summary>Prose craft quality scoring (separate from compliance critic when configured).</summary>
+    QualityCritic = 8
 }

@@ -5,6 +5,7 @@ public static class AgentToolRegistry
 {
     public const int DefaultMaxConsecutiveFailures = 5;
     public const int MaxScriptSteps = 12;
+    public const int MaxSceneBreakUpBeats = 8;
 
     public static IReadOnlyList<string> AllToolSummaries { get; } =
     [
@@ -15,6 +16,9 @@ public static class AgentToolRegistry
         "patch_text — { mode, paragraphStart, paragraphEnd?, excerpt?, text?, useRegex?, caseSensitive? } surgical insert/remove/replace within ¶s",
         "query_lore — { query, scope: scene|book|relationships|all }",
         "query_timeline — { query?, when: before|after|all|current } other scenes in story order",
+        "check_scene_brief — (no args) deterministic beat checklist vs scene instructions",
+        "check_word_budget — (no args) current words vs session target; recommends break_up_scene when short",
+        "break_up_scene — { beats: [ { mode: expand|insert_after, paragraphStart?, paragraphEnd?, afterParagraph?, instruction, targetWords } ], reason? } up to 8 beats; invokes Writer per beat",
         "run_compliance_check — (no args) compliance on current draft",
         "run_quality_check — (no args) prose quality critique on current draft (when enabled)",
         "invoke_writer | invoke_editor | invoke_corrector — { paragraphStart, paragraphEnd, instruction, focusExcerpt?, contextParagraphsBefore?, contextParagraphsAfter?, complianceNotes?, reason? }",
@@ -30,7 +34,7 @@ public static class AgentToolRegistry
         action switch
         {
             "read_section" or "find_text" or "replace_text" or "swap_text" or "patch_text" or "query_lore" or "query_timeline"
-                or "run_compliance_check" or "run_quality_check" or "invoke_writer" or "invoke_editor" or "invoke_corrector"
+                or "check_scene_brief" or "check_word_budget" or "break_up_scene" or "run_compliance_check" or "run_quality_check" or "invoke_writer" or "invoke_editor" or "invoke_corrector"
                 or "propose_patch" or "run_script" or "finish" => true,
             _ => false
         };
@@ -65,6 +69,12 @@ public static class AgentToolRegistry
                 break;
             case "query_timeline":
                 break;
+            case "check_scene_brief":
+                break;
+            case "check_word_budget":
+                break;
+            case "break_up_scene":
+                return ValidateBreakUpScene(dto, paragraphCount);
             case "invoke_writer":
             case "invoke_editor":
             case "invoke_corrector":
@@ -114,6 +124,38 @@ public static class AgentToolRegistry
         return null;
     }
 
+    private static string? ValidateBreakUpScene(AgentEditActionDto dto, int paragraphCount)
+    {
+        if (dto.Beats is null || dto.Beats.Count == 0)
+            return "Error: break_up_scene requires \"beats\": [ { mode, instruction, targetWords, ... }, ... ] (1–8 beats).";
+        if (dto.Beats.Count > MaxSceneBreakUpBeats)
+            return $"Error: break_up_scene limited to {MaxSceneBreakUpBeats} beats per call — split into multiple invocations.";
+
+        for (var i = 0; i < dto.Beats.Count; i++)
+        {
+            var b = dto.Beats[i];
+            if (string.IsNullOrWhiteSpace(b.Instruction))
+                return $"Error: beats[{i}] requires non-empty \"instruction\".";
+            var mode = (b.Mode ?? "expand").Trim().ToLowerInvariant();
+            if (mode is "insert_after")
+            {
+                if (b.AfterParagraph is not { } ap || ap < -1 || ap >= paragraphCount)
+                    return $"Error: beats[{i}] insert_after requires afterParagraph from -1 to {paragraphCount - 1}.";
+            }
+            else if (mode is "expand")
+            {
+                if (b.ParagraphStart is not { } ps || b.ParagraphEnd is not { } pe)
+                    return $"Error: beats[{i}] expand requires paragraphStart and paragraphEnd.";
+                if (ps < 0 || pe < ps || pe >= paragraphCount)
+                    return $"Error: beats[{i}] invalid range {ps}..{pe} for {paragraphCount} paragraphs.";
+            }
+            else
+                return $"Error: beats[{i}] mode must be expand or insert_after.";
+        }
+
+        return null;
+    }
+
     private static string? ValidatePatchText(AgentEditActionDto dto)
     {
         var mode = (dto.Mode ?? "").Trim().ToLowerInvariant();
@@ -146,6 +188,22 @@ public static class AgentToolRegistry
 
     public static bool IsErrorResult(string? result) =>
         !string.IsNullOrEmpty(result) && result.TrimStart().StartsWith("Error:", StringComparison.Ordinal);
+
+    public static bool IsPlanningAction(string action) =>
+        action switch
+        {
+            "read_section" or "find_text" or "query_lore" or "query_timeline" or "check_scene_brief" or "check_word_budget"
+                or "run_compliance_check" or "run_quality_check" => true,
+            _ => false
+        };
+
+    public static bool IsEditAction(string action) =>
+        action switch
+        {
+            "replace_text" or "swap_text" or "patch_text" or "propose_patch" or "break_up_scene"
+                or "invoke_writer" or "invoke_editor" or "invoke_corrector" => true,
+            _ => false
+        };
 }
 
 /// <summary>JSON action DTO shared by the agent loop and script steps.</summary>
@@ -180,4 +238,5 @@ public sealed class AgentEditActionDto
     public string? ExcerptB { get; set; }
     public string? When { get; set; }
     public List<AgentEditActionDto>? Steps { get; set; }
+    public List<AgentSceneBeatDto>? Beats { get; set; }
 }

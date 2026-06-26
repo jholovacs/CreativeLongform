@@ -47,6 +47,14 @@ internal sealed class AgentEditLoopState
     /// <summary>Monotonic revision counter for the working document (this agent session).</summary>
     public int WorkingDocumentRevision { get; set; }
 
+    /// <summary>Turn 1 planning complete (read_section, check_scene_brief, etc.).</summary>
+    public bool PlanningTurnComplete { get; set; }
+
+    public int TurnsUsed { get; set; }
+    public int DelegationCount { get; set; }
+    public int SceneBreakUpCount { get; set; }
+    public bool FinishedCleanly { get; set; }
+
     public void InvalidateCompliance()
     {
         LastComplianceVerdict = null;

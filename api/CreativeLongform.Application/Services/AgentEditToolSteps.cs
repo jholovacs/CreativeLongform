@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using CreativeLongform.Application.Agent;
 using CreativeLongform.Application.Generation;
 
 namespace CreativeLongform.Application.Services;
@@ -14,13 +15,18 @@ internal static class AgentEditToolSteps
         int turn,
         int maxTurns,
         Stopwatch turnSw,
-        Guid llmCallId)
+        Guid llmCallId,
+        bool insideScript = false)
     {
         var kind = action.Action.Trim().ToLowerInvariant();
         var paragraphs = state.Paragraphs;
 
         if (!AgentToolRegistry.IsKnownAction(kind))
             return Err(AgentToolRegistry.UnknownToolMessage(kind));
+
+        var planningErr = ValidatePlanningGate(state, kind, action, turn);
+        if (planningErr is not null)
+            return Err(planningErr);
 
         var misuse = AgentToolRegistry.ValidateToolUse(kind, action, paragraphs.Count);
         if (misuse is not null)
@@ -43,19 +49,28 @@ internal static class AgentEditToolSteps
                 return FindText(state, action);
 
             case "replace_text":
-                return await ReplaceTextAsync(state, action);
+                return await ReplaceTextAsync(state, action, insideScript);
 
             case "swap_text":
-                return await SwapTextAsync(state, action);
+                return await SwapTextAsync(state, action, insideScript);
 
             case "patch_text":
-                return await PatchTextAsync(state, action);
+                return await PatchTextAsync(state, action, insideScript);
 
             case "query_lore":
                 return QueryLore(state, action);
 
             case "query_timeline":
                 return QueryTimeline(state, action);
+
+            case "check_scene_brief":
+                return CheckSceneBrief(state);
+
+            case "check_word_budget":
+                return await AgenticEditLoop.TryCheckWordBudgetAsync(state);
+
+            case "break_up_scene":
+                return await AgenticEditLoop.TryBreakUpSceneAsync(state, action, llmCallId);
 
             case "propose_patch":
                 return await AgenticEditLoop.TryProposePatchAsync(state, action, turn, maxTurns, turnSw, llmCallId, "propose_patch");
@@ -104,7 +119,7 @@ internal static class AgentEditToolSteps
 
             var stepLabel = $"Script step {i + 1}/{steps.Count}";
             await AgentEditProgress.NotifyActionAsync(state, turn, maxTurns, step, llmCallId, turnSw.ElapsedMilliseconds, stepLabel);
-            var result = await ExecuteAsync(state, step, allowFinish: false, turn, maxTurns, turnSw, llmCallId);
+            var result = await ExecuteAsync(state, step, allowFinish: false, turn, maxTurns, turnSw, llmCallId, insideScript: true);
             await AgentEditProgress.NotifyResultAsync(state, turn, maxTurns, stepKind, result.Status, result.Message,
                 llmCallId, turnSw.ElapsedMilliseconds, step, stepLabel);
             report.AppendLine($"  step {i + 1} ({stepKind}): {AgenticEditLoop.Truncate(result.Message, 2000)}");
@@ -129,6 +144,7 @@ internal static class AgentEditToolSteps
 
         var body = AgenticEditLoop.JoinParagraphs(paragraphs.Skip(rs).Take(re - rs + 1).ToList());
         state.ReadRanges.Add((rs, re));
+        state.PlanningTurnComplete = true;
         return Ok($"read_section result (paragraphs {rs}..{re}):\n{body}");
     }
 
@@ -138,11 +154,22 @@ internal static class AgentEditToolSteps
         var find = AgentDraftTextTools.Find(
             state.Paragraphs, pattern, action.UseRegex == true, action.CaseSensitive == true,
             action.MaxMatches, action.ParagraphStart, action.ParagraphEnd);
+        if (find.Ok)
+            state.PlanningTurnComplete = true;
         return find.Ok ? Ok(AgentDraftTextTools.FormatFindResult(find)) : Err(AgentDraftTextTools.FormatFindResult(find));
     }
 
-    private static async Task<AgentToolExecuteResult> ReplaceTextAsync(AgentEditLoopState state, AgentEditActionDto action)
+    private static async Task<AgentToolExecuteResult> ReplaceTextAsync(AgentEditLoopState state, AgentEditActionDto action, bool insideScript)
     {
+        var ps = action.ParagraphStart ?? 0;
+        var pe = action.ParagraphEnd ?? state.Paragraphs.Count - 1;
+        if (!insideScript)
+        {
+            var readErr = AgenticEditLoop.RequireReadRangeError(state.ReadRanges, ps, pe, "replace_text");
+            if (readErr is not null)
+                return Err(readErr);
+        }
+
         var pattern = action.Pattern!.Trim();
         var replacement = LlmProseSanitizer.ProseForApplication(action.Replacement ?? "");
         var replaceKey = AgenticEditLoop.EditKey("replace", action.ParagraphStart ?? 0, action.ParagraphEnd ?? state.Paragraphs.Count - 1,
@@ -159,7 +186,8 @@ internal static class AgentEditToolSteps
         if (replace.ReplacementsApplied > 0 && action.PreviewOnly != true)
         {
             state.AppliedEditKeys.Add(replaceKey);
-            state.ReadRanges.Clear();
+            if (!insideScript)
+                state.ReadRanges.Clear();
             state.MarkEdited();
             await WorkingDocumentNotifier.NotifyAgentStateAsync(state,
                 $"replace_text ({replace.ReplacementsApplied} replacement(s))");
@@ -169,8 +197,17 @@ internal static class AgentEditToolSteps
         return Ok(msg);
     }
 
-    private static async Task<AgentToolExecuteResult> SwapTextAsync(AgentEditLoopState state, AgentEditActionDto action)
+    private static async Task<AgentToolExecuteResult> SwapTextAsync(AgentEditLoopState state, AgentEditActionDto action, bool insideScript)
     {
+        var ps = action.ParagraphStart ?? 0;
+        var pe = action.ParagraphEnd ?? state.Paragraphs.Count - 1;
+        if (!insideScript)
+        {
+            var readErr = AgenticEditLoop.RequireReadRangeError(state.ReadRanges, ps, pe, "swap_text");
+            if (readErr is not null)
+                return Err(readErr);
+        }
+
         var (selectionA, selectionB) = ResolveSwapSelections(action);
         var swapKey = AgenticEditLoop.EditKey("swap", action.ParagraphStart ?? 0, action.ParagraphEnd ?? state.Paragraphs.Count - 1,
             $"{selectionA}\0{selectionB}\0{action.PreviewOnly == true}");
@@ -186,7 +223,8 @@ internal static class AgentEditToolSteps
         if (swap.ParagraphsModified.Count > 0 && action.PreviewOnly != true)
         {
             state.AppliedEditKeys.Add(swapKey);
-            state.ReadRanges.Clear();
+            if (!insideScript)
+                state.ReadRanges.Clear();
             state.MarkEdited();
             await WorkingDocumentNotifier.NotifyAgentStateAsync(state, "swap_text (selections exchanged)");
             return Ok(AgenticEditLoop.AppendPostEditGuidance(state, msg));
@@ -212,8 +250,17 @@ internal static class AgentEditToolSteps
             Pick(action.ExcerptB, action.Text, action.Replacement) ?? "");
     }
 
-    private static async Task<AgentToolExecuteResult> PatchTextAsync(AgentEditLoopState state, AgentEditActionDto action)
+    private static async Task<AgentToolExecuteResult> PatchTextAsync(AgentEditLoopState state, AgentEditActionDto action, bool insideScript)
     {
+        var ps = action.ParagraphStart!.Value;
+        var pe = action.ParagraphEnd ?? ps;
+        if (!insideScript)
+        {
+            var readErr = AgenticEditLoop.RequireReadRangeError(state.ReadRanges, ps, pe, "patch_text");
+            if (readErr is not null)
+                return Err(readErr);
+        }
+
         var mode = action.Mode!.Trim();
         var excerpt = action.Excerpt ?? action.Pattern ?? "";
         var text = LlmProseSanitizer.ProseForApplication(action.Text ?? action.Replacement ?? "");
@@ -225,7 +272,8 @@ internal static class AgentEditToolSteps
             return Err(msg);
         if (patch.ParagraphsModified.Count > 0)
         {
-            state.ReadRanges.Clear();
+            if (!insideScript)
+                state.ReadRanges.Clear();
             state.MarkEdited();
             await WorkingDocumentNotifier.NotifyAgentStateAsync(state, $"patch_text ({mode})");
             return Ok(AgenticEditLoop.AppendPostEditGuidance(state, msg));
@@ -238,6 +286,7 @@ internal static class AgentEditToolSteps
     {
         if (state.RunOptions?.Lore is null)
             return Err("Error: query_lore is not available.");
+        state.PlanningTurnComplete = true;
         return Ok(state.RunOptions.Lore.Query(action.Query, action.Scope));
     }
 
@@ -245,7 +294,37 @@ internal static class AgentEditToolSteps
     {
         if (state.RunOptions?.Timeline is null)
             return Err("Error: query_timeline is not available.");
+        state.PlanningTurnComplete = true;
         return Ok(state.RunOptions.Timeline.Query(action.Query, action.When));
+    }
+
+    private static AgentToolExecuteResult CheckSceneBrief(AgentEditLoopState state)
+    {
+        var draft = AgenticEditLoop.JoinParagraphs(state.Paragraphs);
+        var instructions = state.RunOptions?.SceneInstructionsBlock ?? "";
+        var endNotes = state.RunOptions?.ExpectedEndNotes;
+        state.PlanningTurnComplete = true;
+        return Ok(AgentSceneBriefChecker.Run(draft, instructions, endNotes));
+    }
+
+    private static string? ValidatePlanningGate(AgentEditLoopState state, string kind, AgentEditActionDto action, int turn)
+    {
+        if (turn != 1 || state.PlanningTurnComplete)
+            return null;
+
+        if (kind == "finish"
+            && state.RunOptions?.RunComplianceAsync is null
+            && state.RunOptions?.RunQualityAsync is null)
+            return null;
+
+        if (AgentToolRegistry.IsPlanningAction(kind))
+            return null;
+
+        if (kind == "run_script" && action.Steps is { Count: > 0 } steps && steps.All(s =>
+                AgentToolRegistry.IsPlanningAction(s.Action?.Trim().ToLowerInvariant() ?? "")))
+            return null;
+
+        return "Error: turn 1 must start with planning — read_section, find_text, query_lore, query_timeline, check_scene_brief, or run_*_check. Inspect the draft before editing.";
     }
 
     private static AgentToolExecuteResult Ok(string message) =>
