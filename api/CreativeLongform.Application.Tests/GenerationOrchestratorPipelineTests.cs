@@ -198,7 +198,9 @@ public class GenerationOrchestratorPipelineTests
         await harness.Db.SaveChangesAsync();
 
         harness.Ollama.Enqueue(DraftTestFixtures.SceneDraft);
-        harness.Ollama.Enqueue("""{"pass":false,"violations":["Invented character"],"fixInstructions":["Remove extra name"]}""");
+        harness.Ollama.Enqueue("""
+            {"pass":false,"violations":["Invented kinship — draft quotes 'Her sister had written' with no brief support"],"fixInstructions":["Revise 'Her sister had written from the capital' to an authorized relationship"]}
+            """);
         harness.Ollama.Enqueue(NarrativeStateTestFixtures.MaraInHallway);
 
         var runId = await harness.Orchestrator.StartGenerationAsync(scene.Id, null, new GenerationStartOptions

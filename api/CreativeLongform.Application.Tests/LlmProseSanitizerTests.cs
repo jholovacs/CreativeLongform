@@ -8,6 +8,13 @@ public sealed class LlmProseSanitizerTests
     private const string RedactedThinkingTag = "redacted_" + "thinking";
 
     [Fact]
+    public void ProseForApplication_strips_thinking_tags()
+    {
+        const string raw = "<thinking>plan</thinking>Hello world.";
+        Assert.Equal("Hello world.", LlmProseSanitizer.ProseForApplication(raw));
+    }
+
+    [Fact]
     public void SplitThinkingFromProse_single_line_redacted_tag()
     {
         var raw = $"<{RedactedThinkingTag}>Plan.</{RedactedThinkingTag}> She stepped into the rain.";

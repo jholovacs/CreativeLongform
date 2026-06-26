@@ -348,15 +348,108 @@
 
   /** Must beat `.modal-panel` (defined below) — same single-class specificity was losing the cascade. */
   .modal-panel.gen-log-modal {
-    width: min(90vw, calc(100vw - 2rem));
-    max-height: min(85vh, 36rem);
+    width: min(96vw, calc(100vw - 1.5rem));
+    max-width: 72rem;
+    max-height: min(90vh, 48rem);
     overflow: hidden;
     z-index: 1002;
+    display: flex;
+    flex-direction: column;
 
     .modal-header,
     > .hint {
       flex-shrink: 0;
     }
+  }
+
+  .gen-log-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(14rem, 1fr) minmax(16rem, 1.1fr);
+    gap: 0.75rem;
+  }
+
+  @media (max-width: 720px) {
+    .gen-log-body {
+      grid-template-columns: 1fr;
+      grid-template-rows: minmax(10rem, 34vh) 1fr;
+    }
+  }
+
+  .gen-working-doc {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--input-bg);
+    overflow: hidden;
+  }
+
+  .gen-working-doc-header {
+    flex-shrink: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem 0.75rem;
+    padding: 0.5rem 0.65rem;
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface) 92%, var(--accent) 8%);
+
+    h3 {
+      margin: 0;
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+  }
+
+  .gen-working-doc-meta {
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+  }
+
+  .gen-working-doc-change {
+    font-size: 0.78rem;
+    color: var(--accent);
+    flex: 1 1 100%;
+  }
+
+  .gen-working-doc-scroll {
+    flex: 1 1 auto;
+    overflow: auto;
+    padding: 0.55rem 0.65rem;
+    min-height: 0;
+  }
+
+  .gen-working-doc-para {
+    margin: 0 0 0.85rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .gen-working-doc-para-changed {
+    animation: gen-wd-flash 1.4s ease-out;
+    border-radius: 4px;
+    padding: 0.15rem 0.25rem;
+    margin-left: -0.25rem;
+    margin-right: -0.25rem;
+  }
+
+  @keyframes gen-wd-flash {
+    0% {
+      background: color-mix(in srgb, var(--accent) 35%, transparent);
+    }
+    100% {
+      background: transparent;
+    }
+  }
+
+  .gen-working-doc-empty {
+    padding: 0.65rem;
+    margin: 0;
   }
 
   .gen-log-modal-footer {

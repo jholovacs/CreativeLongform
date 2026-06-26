@@ -21,6 +21,9 @@ public static partial class AgenticEditLoop
     private const int MaxReplacementChars = 80_000;
     /// <summary>Max chars of raw model output embedded in tool feedback to the agent (not sent over SignalR).</summary>
     private const int ToolResultTruncationChars = 12_000;
+    private const int MaxToolHistoryEntries = 16;
+    private const int MaxToolHistoryChars = 10_000;
+    private const int ToolHistoryResultTruncation = 2500;
     private const int ProgressPatchExcerptChars = 7000;
 
     private static readonly string SystemPrompt = """
@@ -29,6 +32,11 @@ public static partial class AgenticEditLoop
         BOOK DIRECTIVES (tone, content style, synopsis) appear in every user message — honor them in every edit and delegation.
 
         Respond with a single JSON object only (no markdown fences). Property names are case-insensitive.
+
+        REFLECTION — required every turn (plain English for the author following the log):
+        - "conclusion": What you infer from the current draft, recent tool history, and open compliance failures (1–2 sentences).
+        - "nextStep": What this turn's chosen action will accomplish and why (1 sentence; must match "action").
+        Example: { "conclusion": "Compliance still fails on past tense in ¶1.", "nextStep": "Invoke Editor on ¶1 to convert verbs to past tense.", "action": "invoke_editor", "paragraphStart": 1, "paragraphEnd": 1, "instruction": "…" }
 
         Tools:
         - { "action": "read_section", "paragraphStart": <int>, "paragraphEnd": <int> } — inclusive paragraph indices (0..N-1).
@@ -39,12 +47,18 @@ public static partial class AgenticEditLoop
         - { "action": "query_lore", "query": "<keywords>", "scope": "scene"|"book"|"relationships"|"all" } — world elements, book notes, relationships.
         - { "action": "query_timeline", "query": "<keywords optional>", "when": "before"|"after"|"all"|"current" } — other scenes in story order for continuity (never contradict earlier/later canon).
         - { "action": "run_compliance_check" } — compliance on CURRENT full draft (perspective, POV, tense, grammar/punctuation, canon).
+        - { "action": "run_quality_check" } — prose craft quality on CURRENT full draft (when available in this session).
         - { "action": "invoke_writer", "paragraphStart": <int>, "paragraphEnd": <int>, "instruction": "<brief>", "focusExcerpt": "<optional>", "contextParagraphsBefore": <int>, "contextParagraphsAfter": <int>, "complianceNotes": "<optional>", "reason": "<why>" } — creative rewrite; YOU choose how much context the delegated model needs via focusExcerpt and contextParagraphsBefore/After.
         - { "action": "invoke_editor", ... same optional scope fields ... } — light touch-ups (tense, perspective, formatting).
         - { "action": "invoke_corrector", ... same optional scope fields ... } — grammar/punctuation.
         - { "action": "propose_patch", "paragraphStart": <int>, "paragraphEnd": <int>, "replacement": "<prose>", "reason": "<why>" } — apply your own replacement directly.
         - { "action": "run_script", "steps": [ { ...tool json... }, ... ], "reason": "<why>" } — batch up to 12 surgical steps (find → patch → replace, multiple localized fixes). Stops on first error. No nested run_script or finish inside scripts.
-        - { "action": "finish", "reason": "<short reason>" } — stop ONLY after run_compliance_check returned pass:true on the CURRENT draft.
+        - { "action": "finish", "reason": "<short reason>" } — stop ONLY after required checks pass on the CURRENT draft (see finish rules below).
+
+        Finish rules:
+        - When run_compliance_check is available: pass:true on the CURRENT draft before finish.
+        - When run_quality_check is available and required: score at or above the session threshold with no remaining fixInstructions on the CURRENT draft.
+        - When an AUTHOR CORRECTION MISSION appears in the user message: finish only after you judge the mission fully implemented (state this in reason).
 
         Script strategy (multi-target fixes):
         - Use run_script to chain localization + fix steps: find_text → swap_text, patch_text, or replace_text for several compliance items in one turn.
@@ -58,10 +72,11 @@ public static partial class AgenticEditLoop
 
         Compliance-driven correction loop (mandatory when run_compliance_check is available):
         1. run_compliance_check on the current draft.
-        2. If pass:false — read_section cited ranges, then fix EVERY violation. Quote fixInstructions verbatim in invoke_* instructions.
-        3. After substantive edits, run_compliance_check again until pass:true or turns exhausted.
-        4. Re-invoke delegated models with NEW instructions when fixes were incomplete.
-        5. Do not finish while pass:false.
+        2. If pass:false — for EACH fixInstruction, find_text the quoted phrase on the CURRENT draft first. If not found, treat that item as a critic hallucination — skip it; do NOT edit the draft to match phantom text.
+        3. read_section cited ranges, then fix only verified violations. Quote verified fixInstructions in invoke_* instructions.
+        4. After substantive edits, run_compliance_check again until pass:true or turns exhausted.
+        5. Re-invoke delegated models with NEW instructions when fixes were incomplete.
+        6. Do not finish while pass:false with verified (draft-grounded) issues remaining.
 
         Model selection:
         - find_text + replace_text / swap_text / patch_text — mechanical fixes without an LLM.
@@ -71,10 +86,21 @@ public static partial class AgenticEditLoop
         - invoke_writer — creative rewrite or voice overhaul.
 
         Strategy:
-        - query_lore / query_timeline when unsure → read_section → fix tools or run_script → run_compliance_check → finish.
+        - query_lore / query_timeline when unsure → read_section → fix tools or run_script → run_compliance_check → run_quality_check (when available) → finish.
         - Preserve plot-critical substance; never compress dramatized beats into summary.
         - Summarized draft view: read_section before invoke_* or propose_patch on that range.
         - Indices refer to the CURRENT draft (after prior patches in this session).
+        - Review "Recent tool history" before retrying find/replace or patch_text. If a pattern returned "no matches", use find_text on the CURRENT draft for exact text — do not repeat the same failed pattern.
+        """;
+
+    private static readonly string UserCorrectionSystemAddendum = """
+
+        AUTHOR CORRECTION MODE — the user message includes an AUTHOR CORRECTION MISSION (primary goal for this session).
+        - Turn 1: read the mission, inspect relevant draft ranges (read_section / find_text), and query lore or timeline when continuity is unclear. State your implementation plan in conclusion and nextStep before editing.
+        - Gather as much context as needed via read_section, query_lore, and query_timeline before invoke_* or propose_patch.
+        - Implement the mission surgically — preserve unrelated prose unless the mission requires broader changes.
+        - After substantive edits: run_compliance_check, then run_quality_check (when available). Address verified fixInstructions; re-check until you judge the mission complete and checks pass.
+        - finish only when the mission is done, compliance passes (when available), and quality is acceptable (when required).
         """;
 
     public static async Task<string> RunAsync(
@@ -103,34 +129,45 @@ public static partial class AgenticEditLoop
             Notifier = notifier,
             RunId = runId,
             PipelineElapsedMs = pipelineElapsedMs,
-            CancellationToken = cancellationToken
+            CancellationToken = cancellationToken,
+            WorkingDocumentRevision = runOptions?.InitialWorkingDocumentRevision ?? 0
         };
+
+        if (state.WorkingDocumentRevision == 0)
+        {
+            await WorkingDocumentNotifier.NotifyAgentStateAsync(state, "Working document opened (initial draft)");
+        }
 
         var maxConsecutiveFailures = runOptions?.MaxConsecutiveToolFailures ?? AgentToolRegistry.DefaultMaxConsecutiveFailures;
         var consecutiveFailures = 0;
+        var systemPrompt = BuildSystemPrompt(runOptions);
         ComplianceVerdict? lastComplianceVerdict = null;
+        QualityVerdict? lastQualityVerdict = null;
         string? lastToolResult = null;
         for (var turn = 1; turn <= maxTurns; turn++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var numbered = BuildParagraphReference(paragraphs);
             var paragraphingWarning = BuildParagraphingWarning(paragraphs);
             var user = BuildUserMessage(
                 sceneInstructions,
                 expectedEndNotes,
                 worldBlock,
-                runOptions?.BookDirectiveBlock,
+                runOptions,
+                JoinParagraphs(paragraphs),
                 turn,
                 maxTurns,
                 paragraphs.Count,
                 numbered,
-                lastToolResult,
+                state.ToolHistory,
                 paragraphingWarning,
-                lastComplianceVerdict);
+                lastComplianceVerdict,
+                lastQualityVerdict);
 
             await AgentEditProgress.NotifyStatusAsync(state, AgentEditNarrative.DescribeThinking(state));
 
             var turnSw = Stopwatch.StartNew();
-            var (raw, _, llmCallId) = await chatJsonAsync(SystemPrompt, user, cancellationToken);
+            var (raw, _, llmCallId) = await chatJsonAsync(systemPrompt, user, cancellationToken);
             turnSw.Stop();
             var cleaned = LlmJson.StripMarkdownFences(raw).Trim();
             AgentEditActionDto? action;
@@ -144,6 +181,7 @@ public static partial class AgenticEditLoop
                 lastToolResult = $"Error: output was not valid JSON. Fix and try again. Raw (truncated): {Truncate(cleaned, ToolResultTruncationChars)}";
                 consecutiveFailures++;
                 lastToolResult = AgentToolRegistry.AppendFailureBudget(lastToolResult, consecutiveFailures, maxConsecutiveFailures);
+                RecordToolHistory(state, turn, Truncate(cleaned, 1200), lastToolResult);
                 await AgentEditProgress.NotifyActionAttemptAsync(state, turn, maxTurns, cleaned, llmCallId, turnSw.ElapsedMilliseconds,
                     "model returned invalid JSON — will retry");
                 await AgentEditProgress.NotifyResultAsync(state, turn, maxTurns, "parse_error", AgentToolExecuteStatus.Error,
@@ -162,6 +200,7 @@ public static partial class AgenticEditLoop
                 lastToolResult = "Error: missing \"action\" in JSON.";
                 consecutiveFailures++;
                 lastToolResult = AgentToolRegistry.AppendFailureBudget(lastToolResult, consecutiveFailures, maxConsecutiveFailures);
+                RecordToolHistory(state, turn, Truncate(cleaned, 1200), lastToolResult);
                 await AgentEditProgress.NotifyActionAttemptAsync(state, turn, maxTurns, cleaned, llmCallId, turnSw.ElapsedMilliseconds,
                     "JSON missing \"action\" field");
                 await AgentEditProgress.NotifyResultAsync(state, turn, maxTurns, "parse_error", AgentToolExecuteStatus.Error,
@@ -176,11 +215,21 @@ public static partial class AgenticEditLoop
             }
 
             var kind = action.Action.Trim().ToLowerInvariant();
+            var reflection = AgentEditNarrative.DescribeReflection(action);
+            if (!string.IsNullOrEmpty(reflection))
+            {
+                state.LastConclusion = action.Conclusion?.Trim();
+                state.LastNextStep = action.NextStep?.Trim();
+                await AgentEditProgress.NotifyStatusAsync(state, reflection, llmCallId, turnSw.ElapsedMilliseconds);
+            }
+
             await AgentEditProgress.NotifyActionAsync(state, turn, maxTurns, action, llmCallId, turnSw.ElapsedMilliseconds);
             var toolResult = await AgentEditToolSteps.ExecuteAsync(state, action, allowFinish: true, turn, maxTurns, turnSw, llmCallId);
 
             lastToolResult = toolResult.Message;
             lastComplianceVerdict = state.LastComplianceVerdict;
+            lastQualityVerdict = state.LastQualityVerdict;
+            RecordToolHistory(state, turn, AgentEditProgress.FormatActionJson(action), lastToolResult);
 
             if (toolResult.Status == AgentToolExecuteStatus.Error || AgentToolRegistry.IsErrorResult(lastToolResult))
             {
@@ -294,25 +343,41 @@ public static partial class AgenticEditLoop
         return sb.ToString();
     }
 
+    private static string BuildSystemPrompt(AgentEditRunOptions? runOptions)
+    {
+        if (string.IsNullOrWhiteSpace(runOptions?.UserCorrectionMission))
+            return SystemPrompt;
+        return SystemPrompt + UserCorrectionSystemAddendum;
+    }
+
     private static string BuildUserMessage(
         string sceneInstructions,
         string? expectedEndNotes,
         string worldBlock,
-        string? bookDirectiveBlock,
+        AgentEditRunOptions? runOptions,
+        string fullDraft,
         int turn,
         int maxTurns,
         int paragraphCount,
         string numberedReference,
-        string? lastToolResult,
+        IReadOnlyList<AgentToolHistoryEntry> toolHistory,
         string? paragraphingWarning,
-        ComplianceVerdict? openCompliance)
+        ComplianceVerdict? openCompliance,
+        QualityVerdict? openQuality)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Turn {turn} of {maxTurns} (draft has {paragraphCount} paragraphs, indices 0..{Math.Max(0, paragraphCount - 1)}).");
         sb.AppendLine();
-        if (!string.IsNullOrWhiteSpace(bookDirectiveBlock))
+        var missionBlock = FormatUserCorrectionMissionBlock(runOptions, fullDraft);
+        if (!string.IsNullOrEmpty(missionBlock))
         {
-            sb.AppendLine(bookDirectiveBlock);
+            sb.AppendLine(missionBlock);
+            sb.AppendLine();
+        }
+
+        if (!string.IsNullOrWhiteSpace(runOptions?.BookDirectiveBlock))
+        {
+            sb.AppendLine(runOptions.BookDirectiveBlock);
             sb.AppendLine();
         }
 
@@ -331,6 +396,22 @@ public static partial class AgenticEditLoop
             sb.AppendLine();
         }
 
+        if (openQuality is not null && QualityNeedsAttention(openQuality, runOptions?.QualityReviewMinScore ?? 55))
+        {
+            sb.AppendLine("OPEN QUALITY ISSUES (address before finish; run_quality_check again after edits):");
+            sb.AppendLine($"  score: {openQuality.Score:0}");
+            foreach (var issue in openQuality.Issues)
+                sb.AppendLine($"  • {issue}");
+            if (openQuality.FixInstructions.Count > 0)
+            {
+                sb.AppendLine("Suggested craft fixes:");
+                foreach (var f in openQuality.FixInstructions)
+                    sb.AppendLine($"  → {f}");
+            }
+
+            sb.AppendLine();
+        }
+
         sb.AppendLine("Scene instructions:");
         sb.AppendLine(sceneInstructions);
         sb.AppendLine();
@@ -340,10 +421,16 @@ public static partial class AgenticEditLoop
         sb.AppendLine("World context:");
         sb.AppendLine(worldBlock);
         sb.AppendLine();
-        if (!string.IsNullOrEmpty(lastToolResult))
+        if (!string.IsNullOrWhiteSpace(runOptions?.AuthorizedCastBlock))
         {
-            sb.AppendLine("Last tool result:");
-            sb.AppendLine(lastToolResult);
+            sb.AppendLine(runOptions.AuthorizedCastBlock);
+            sb.AppendLine();
+        }
+
+        var historyBlock = FormatToolHistory(toolHistory);
+        if (!string.IsNullOrEmpty(historyBlock))
+        {
+            sb.AppendLine(historyBlock);
             sb.AppendLine();
         }
 
@@ -436,7 +523,7 @@ public static partial class AgenticEditLoop
             return Task.FromResult(new ParagraphEditResult { ToolResult = err });
         }
 
-        var replacement = action.Replacement ?? "";
+        var replacement = LlmProseSanitizer.ProseForApplication(action.Replacement ?? "");
         if (string.IsNullOrWhiteSpace(replacement))
         {
             var err = "Error: requires non-empty replacement prose.";
@@ -489,7 +576,7 @@ public static partial class AgenticEditLoop
         return Task.FromResult(new ParagraphEditResult { ToolResult = $"{ok}\n\n{patchDetail}" });
     }
 
-    private static string FormatComplianceToolResult(ComplianceVerdict verdict)
+    private static string FormatComplianceToolResult(ComplianceVerdict verdict, IReadOnlyList<string>? droppedItems = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("compliance_check result:");
@@ -506,13 +593,21 @@ public static partial class AgenticEditLoop
         else
             foreach (var f in verdict.FixInstructions)
                 sb.AppendLine($"    - {f}");
+        if (droppedItems is { Count: > 0 })
+        {
+            sb.AppendLine("  dropped (critic cited text not in draft or echoed prompt rules — ignore):");
+            foreach (var d in droppedItems)
+                sb.AppendLine($"    - {d}");
+        }
+
         if (!verdict.Pass)
         {
             sb.AppendLine();
             sb.AppendLine("  next_steps:");
-            sb.AppendLine("    1. read_section each cited paragraph range.");
-            sb.AppendLine("    2. invoke_editor / invoke_writer / invoke_corrector / propose_patch — paste fixInstructions into your instruction (add \"Try again: …\" if re-invoking after a partial fix).");
-            sb.AppendLine("    3. run_compliance_check again. Do NOT finish until pass:true.");
+            sb.AppendLine("    1. find_text each quoted phrase in fixInstructions — skip items with no matches (hallucination).");
+            sb.AppendLine("    2. read_section each cited paragraph range for verified items only.");
+            sb.AppendLine("    3. invoke_editor / invoke_writer / invoke_corrector / propose_patch / replace_text — verified fixInstructions only.");
+            sb.AppendLine("    4. run_compliance_check again. Do NOT finish until pass:true.");
         }
 
         return sb.ToString().TrimEnd();
@@ -586,9 +681,95 @@ public static partial class AgenticEditLoop
         return sb.ToString().TrimEnd();
     }
 
-    internal static string AppendPostEditGuidance(string toolResult) =>
-        toolResult
-        + "\n\nDraft edited — compliance status is stale. run_compliance_check. If pass:false, re-invoke with a NEW instruction quoting remaining fixInstructions (e.g. \"Try again: except convert all verbs to past tense …\").";
+    private static string FormatUserCorrectionMissionBlock(AgentEditRunOptions? runOptions, string fullDraft)
+    {
+        if (string.IsNullOrWhiteSpace(runOptions?.UserCorrectionMission))
+            return "";
+
+        var sb = new StringBuilder();
+        sb.AppendLine("AUTHOR CORRECTION MISSION (primary goal — implement fully before finish):");
+        sb.AppendLine(runOptions.UserCorrectionMission.Trim());
+        if (runOptions.SelectionStart is int start && runOptions.SelectionEnd is int end && end > start &&
+            start >= 0 && end <= fullDraft.Length)
+        {
+            sb.AppendLine();
+            sb.AppendLine(
+                $"SELECTION FOCUS — UTF-16 indices {start}..{end} exclusive (prioritize edits here; keep surrounding prose unless the mission requires more):");
+            sb.AppendLine("---");
+            sb.AppendLine(fullDraft[start..end]);
+            sb.AppendLine("---");
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private static bool QualityNeedsAttention(QualityVerdict verdict, double reviewMin) =>
+        verdict.Score < reviewMin || verdict.FixInstructions.Count > 0;
+
+    private static string FormatQualityToolResult(QualityVerdict verdict, double reviewMin)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("quality_check result:");
+        sb.AppendLine($"  score: {verdict.Score:0}");
+        sb.AppendLine("  issues:");
+        if (verdict.Issues.Count == 0)
+            sb.AppendLine("    (none)");
+        else
+            foreach (var issue in verdict.Issues)
+                sb.AppendLine($"    - {issue}");
+        sb.AppendLine("  fixInstructions:");
+        if (verdict.FixInstructions.Count == 0)
+            sb.AppendLine("    (none)");
+        else
+            foreach (var f in verdict.FixInstructions)
+                sb.AppendLine($"    - {f}");
+
+        if (QualityNeedsAttention(verdict, reviewMin))
+        {
+            sb.AppendLine();
+            sb.AppendLine("  next_steps:");
+            sb.AppendLine("    1. read_section cited ranges for craft issues tied to your edits.");
+            sb.AppendLine("    2. invoke_writer / invoke_editor / invoke_corrector / patch tools — address fixInstructions.");
+            sb.AppendLine("    3. run_quality_check again. Do NOT finish while score is below threshold or fixInstructions remain.");
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private static string FormatQualityMustFixBeforeFinish(QualityVerdict verdict, double reviewMin)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(
+            $"Error: cannot finish — last quality check score {verdict.Score:0} (need >={reviewMin:0}) or fixInstructions remain. Address craft issues, then run_quality_check until clear.");
+        if (verdict.Issues.Count > 0)
+        {
+            sb.AppendLine("Outstanding issues:");
+            foreach (var issue in verdict.Issues)
+                sb.AppendLine($"  • {issue}");
+        }
+
+        if (verdict.FixInstructions.Count > 0)
+        {
+            sb.AppendLine("Apply these fixInstructions:");
+            foreach (var f in verdict.FixInstructions)
+                sb.AppendLine($"  → {f}");
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    internal static string AppendPostEditGuidance(AgentEditLoopState state, string toolResult)
+    {
+        var checks = state.RunOptions?.RunQualityAsync is not null && state.RunOptions.RunComplianceAsync is not null
+            ? "run_compliance_check and run_quality_check"
+            : state.RunOptions?.RunComplianceAsync is not null
+                ? "run_compliance_check"
+                : state.RunOptions?.RunQualityAsync is not null
+                    ? "run_quality_check"
+                    : "run_compliance_check";
+        return toolResult
+               + $"\n\nDraft edited — check status is stale. {checks}. If failures remain, re-invoke with a NEW instruction quoting remaining fixInstructions.";
+    }
 
     internal static string EditKey(string kind, int start, int end, string payload) =>
         $"{kind}:{start}:{end}:{payload.Trim()}";
@@ -597,6 +778,56 @@ public static partial class AgenticEditLoop
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(draft));
         return Convert.ToHexString(bytes);
+    }
+
+    internal static void RecordToolHistory(AgentEditLoopState state, int turn, string requestSummary, string result)
+    {
+        state.ToolHistory.Add(new AgentToolHistoryEntry(
+            turn,
+            requestSummary.Trim(),
+            Truncate(result, ToolHistoryResultTruncation),
+            AgentToolRegistry.IsErrorResult(result)));
+        TrimToolHistory(state);
+    }
+
+    private static void TrimToolHistory(AgentEditLoopState state)
+    {
+        while (state.ToolHistory.Count > MaxToolHistoryEntries)
+            state.ToolHistory.RemoveAt(0);
+
+        while (state.ToolHistory.Count > 0 && ToolHistoryCharCount(state.ToolHistory) > MaxToolHistoryChars)
+            state.ToolHistory.RemoveAt(0);
+    }
+
+    private static int ToolHistoryCharCount(IReadOnlyList<AgentToolHistoryEntry> history)
+    {
+        var n = 0;
+        foreach (var entry in history)
+            n += entry.RequestSummary.Length + entry.Result.Length + 32;
+        return n;
+    }
+
+    private static string FormatToolHistory(IReadOnlyList<AgentToolHistoryEntry> history)
+    {
+        if (history.Count == 0)
+            return "";
+
+        var sb = new StringBuilder();
+        sb.AppendLine(
+            "Recent tool history (oldest first — review before retrying find/replace; do not repeat patterns that returned no matches):");
+        foreach (var entry in history)
+        {
+            sb.AppendLine($"Turn {entry.Turn} request:");
+            sb.AppendLine(entry.RequestSummary);
+            sb.Append("Turn ").Append(entry.Turn).Append(" result");
+            if (entry.IsError)
+                sb.Append(" (error)");
+            sb.AppendLine(":");
+            sb.AppendLine(entry.Result);
+            sb.AppendLine();
+        }
+
+        return sb.ToString().TrimEnd();
     }
 
 }

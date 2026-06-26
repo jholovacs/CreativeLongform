@@ -7,6 +7,9 @@ public static class LlmProseSanitizer
 {
     public sealed record SplitResult(string Prose, string? ThinkingNotes);
 
+    /// <summary>Prose safe to insert into the working document (thinking tags removed).</summary>
+    public static string ProseForApplication(string? raw) => SplitThinkingFromProse(raw).Prose;
+
     /// <summary>Removes thinking XML blocks from prose and returns their inner text as notes.</summary>
     public static SplitResult SplitThinkingFromProse(string? raw)
     {

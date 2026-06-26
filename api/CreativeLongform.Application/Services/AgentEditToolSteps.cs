@@ -43,13 +43,13 @@ internal static class AgentEditToolSteps
                 return FindText(state, action);
 
             case "replace_text":
-                return ReplaceText(state, action);
+                return await ReplaceTextAsync(state, action);
 
             case "swap_text":
-                return SwapText(state, action);
+                return await SwapTextAsync(state, action);
 
             case "patch_text":
-                return PatchText(state, action);
+                return await PatchTextAsync(state, action);
 
             case "query_lore":
                 return QueryLore(state, action);
@@ -62,6 +62,9 @@ internal static class AgentEditToolSteps
 
             case "run_compliance_check":
                 return await AgenticEditLoop.TryComplianceCheckAsync(state, turn, maxTurns, turnSw, llmCallId);
+
+            case "run_quality_check":
+                return await AgenticEditLoop.TryQualityCheckAsync(state, turn, maxTurns, turnSw, llmCallId);
 
             case "invoke_writer":
                 return await AgenticEditLoop.TryInvokeWriterAsync(state, action, turn, maxTurns, turnSw, llmCallId);
@@ -138,10 +141,10 @@ internal static class AgentEditToolSteps
         return find.Ok ? Ok(AgentDraftTextTools.FormatFindResult(find)) : Err(AgentDraftTextTools.FormatFindResult(find));
     }
 
-    private static AgentToolExecuteResult ReplaceText(AgentEditLoopState state, AgentEditActionDto action)
+    private static async Task<AgentToolExecuteResult> ReplaceTextAsync(AgentEditLoopState state, AgentEditActionDto action)
     {
         var pattern = action.Pattern!.Trim();
-        var replacement = action.Replacement ?? "";
+        var replacement = LlmProseSanitizer.ProseForApplication(action.Replacement ?? "");
         var replaceKey = AgenticEditLoop.EditKey("replace", action.ParagraphStart ?? 0, action.ParagraphEnd ?? state.Paragraphs.Count - 1,
             $"{pattern}\0{replacement}\0{action.PreviewOnly == true}");
         if (action.PreviewOnly != true && state.AppliedEditKeys.Contains(replaceKey))
@@ -158,13 +161,15 @@ internal static class AgentEditToolSteps
             state.AppliedEditKeys.Add(replaceKey);
             state.ReadRanges.Clear();
             state.MarkEdited();
-            return Ok(AgenticEditLoop.AppendPostEditGuidance(msg));
+            await WorkingDocumentNotifier.NotifyAgentStateAsync(state,
+                $"replace_text ({replace.ReplacementsApplied} replacement(s))");
+            return Ok(AgenticEditLoop.AppendPostEditGuidance(state, msg));
         }
 
         return Ok(msg);
     }
 
-    private static AgentToolExecuteResult SwapText(AgentEditLoopState state, AgentEditActionDto action)
+    private static async Task<AgentToolExecuteResult> SwapTextAsync(AgentEditLoopState state, AgentEditActionDto action)
     {
         var (selectionA, selectionB) = ResolveSwapSelections(action);
         var swapKey = AgenticEditLoop.EditKey("swap", action.ParagraphStart ?? 0, action.ParagraphEnd ?? state.Paragraphs.Count - 1,
@@ -183,7 +188,8 @@ internal static class AgentEditToolSteps
             state.AppliedEditKeys.Add(swapKey);
             state.ReadRanges.Clear();
             state.MarkEdited();
-            return Ok(AgenticEditLoop.AppendPostEditGuidance(msg));
+            await WorkingDocumentNotifier.NotifyAgentStateAsync(state, "swap_text (selections exchanged)");
+            return Ok(AgenticEditLoop.AppendPostEditGuidance(state, msg));
         }
 
         return Ok(msg);
@@ -206,11 +212,11 @@ internal static class AgentEditToolSteps
             Pick(action.ExcerptB, action.Text, action.Replacement) ?? "");
     }
 
-    private static AgentToolExecuteResult PatchText(AgentEditLoopState state, AgentEditActionDto action)
+    private static async Task<AgentToolExecuteResult> PatchTextAsync(AgentEditLoopState state, AgentEditActionDto action)
     {
         var mode = action.Mode!.Trim();
         var excerpt = action.Excerpt ?? action.Pattern ?? "";
-        var text = action.Text ?? action.Replacement ?? "";
+        var text = LlmProseSanitizer.ProseForApplication(action.Text ?? action.Replacement ?? "");
         var patch = AgentDraftTextTools.Patch(
             state.Paragraphs, mode, action.ParagraphStart!.Value, action.ParagraphEnd,
             excerpt, text, action.UseRegex == true, action.CaseSensitive == true);
@@ -221,7 +227,8 @@ internal static class AgentEditToolSteps
         {
             state.ReadRanges.Clear();
             state.MarkEdited();
-            return Ok(AgenticEditLoop.AppendPostEditGuidance(msg));
+            await WorkingDocumentNotifier.NotifyAgentStateAsync(state, $"patch_text ({mode})");
+            return Ok(AgenticEditLoop.AppendPostEditGuidance(state, msg));
         }
 
         return Ok(msg);

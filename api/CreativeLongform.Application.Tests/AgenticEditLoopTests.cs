@@ -388,11 +388,49 @@ public class AgenticEditLoopTests
         Assert.Equal(5, calls);
     }
 
+    [Fact]
+    public async Task RunAsync_accumulates_tool_request_and_response_in_later_turns()
+    {
+        string? secondUserMessage = null;
+        var calls = 0;
+        await AgenticEditLoop.RunAsync(
+            "Hello world.",
+            "instr",
+            null,
+            "world",
+            maxTurns: 4,
+            NullLogger.Instance,
+            (_, user, _) =>
+            {
+                calls++;
+                if (calls == 2)
+                    secondUserMessage = user;
+                return Task.FromResult(calls switch
+                {
+                    1 => ("""{"action":"replace_text","pattern":"missing phrase","replacement":"x"}""", "", Guid.Empty),
+                    2 => ("""{"action":"read_section","paragraphStart":0,"paragraphEnd":0}""", "", Guid.Empty),
+                    _ => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty)
+                });
+            },
+            new NoopNotifier(),
+            Guid.NewGuid(),
+            () => 0L,
+            CancellationToken.None,
+            new AgentEditRunOptions { MaxConsecutiveToolFailures = 5 });
+
+        Assert.NotNull(secondUserMessage);
+        Assert.Contains("Recent tool history", secondUserMessage, StringComparison.Ordinal);
+        Assert.Contains("missing phrase", secondUserMessage, StringComparison.Ordinal);
+        Assert.Contains("no matches", secondUserMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed class NoopNotifier : IGenerationProgressNotifier
     {
         public Task NotifyAsync(Guid generationRunId, string eventName, string? step, string? detail,
             CancellationToken cancellationToken = default, long? elapsedMsSinceRunStart = null,
-            long? stepDurationMs = null, Guid? llmCallId = null) =>
+            long? stepDurationMs = null,         Guid? llmCallId = null,
+        string? workingDocumentText = null,
+        int? documentRevision = null) =>
             Task.CompletedTask;
     }
 }

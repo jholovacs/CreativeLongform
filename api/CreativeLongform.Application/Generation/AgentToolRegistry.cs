@@ -16,10 +16,11 @@ public static class AgentToolRegistry
         "query_lore — { query, scope: scene|book|relationships|all }",
         "query_timeline — { query?, when: before|after|all|current } other scenes in story order",
         "run_compliance_check — (no args) compliance on current draft",
+        "run_quality_check — (no args) prose quality critique on current draft (when enabled)",
         "invoke_writer | invoke_editor | invoke_corrector — { paragraphStart, paragraphEnd, instruction, focusExcerpt?, contextParagraphsBefore?, contextParagraphsAfter?, complianceNotes?, reason? }",
         "propose_patch — { paragraphStart, paragraphEnd, replacement, reason? }",
         "run_script — { steps: [ {...tool json...}, ... ], reason? } up to 12 steps, stops on first error",
-        "finish — { reason } only after run_compliance_check pass:true"
+        "finish — { reason } only after required checks pass on the CURRENT draft"
     ];
 
     public static string FormatAvailableTools() =>
@@ -29,7 +30,7 @@ public static class AgentToolRegistry
         action switch
         {
             "read_section" or "find_text" or "replace_text" or "swap_text" or "patch_text" or "query_lore" or "query_timeline"
-                or "run_compliance_check" or "invoke_writer" or "invoke_editor" or "invoke_corrector"
+                or "run_compliance_check" or "run_quality_check" or "invoke_writer" or "invoke_editor" or "invoke_corrector"
                 or "propose_patch" or "run_script" or "finish" => true,
             _ => false
         };
@@ -155,6 +156,10 @@ public sealed class AgentEditActionDto
     public int? ParagraphEnd { get; set; }
     public string? Replacement { get; set; }
     public string? Reason { get; set; }
+    /// <summary>What the agent concluded from the draft, tool history, and compliance state this turn.</summary>
+    public string? Conclusion { get; set; }
+    /// <summary>What this turn's action will do and why (must align with action).</summary>
+    public string? NextStep { get; set; }
     public string? Query { get; set; }
     public string? Scope { get; set; }
     public string? Instruction { get; set; }

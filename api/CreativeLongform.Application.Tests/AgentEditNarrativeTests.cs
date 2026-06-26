@@ -41,6 +41,53 @@ public class AgentEditNarrativeTests
     }
 
     [Fact]
+    public void DescribeThinking_includes_last_conclusion_when_set()
+    {
+        var state = new AgentEditLoopState
+        {
+            Paragraphs = ["a"],
+            Notifier = new NoopNotifier(),
+            RunId = Guid.NewGuid(),
+            PipelineElapsedMs = () => 0,
+            CancellationToken = CancellationToken.None,
+            LastNarrativeHint = "compliance failures",
+            LastConclusion = "Past tense errors remain in paragraph 1."
+        };
+        var msg = AgentEditNarrative.DescribeThinking(state);
+        Assert.Contains("last conclusion:", msg, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Past tense errors remain", msg, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DescribeReflection_formats_conclusion_and_next_step()
+    {
+        var action = new AgentEditActionDto
+        {
+            Action = "invoke_editor",
+            Conclusion = "Compliance failed on tense in paragraph 1.",
+            NextStep = "Invoke Editor on paragraph 1 to convert verbs to past tense.",
+            ParagraphStart = 1,
+            ParagraphEnd = 1
+        };
+        var msg = AgentEditNarrative.DescribeReflection(action);
+        Assert.Contains("Agent concluded:", msg, StringComparison.Ordinal);
+        Assert.Contains("Next step:", msg, StringComparison.Ordinal);
+        Assert.Contains("past tense", msg, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DescribeReflection_falls_back_to_reason_when_conclusion_missing()
+    {
+        var action = new AgentEditActionDto
+        {
+            Action = "run_compliance_check",
+            Reason = "Need a fresh compliance verdict after the patch."
+        };
+        var msg = AgentEditNarrative.DescribeReflection(action);
+        Assert.Contains("fresh compliance verdict", msg, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void QuoteForLog_empty_returns_empty_not_ellipsis_placeholder()
     {
         Assert.Equal("", AgentEditNarrative.QuoteForLog(null));
@@ -60,7 +107,9 @@ public class AgentEditNarrativeTests
     {
         public Task NotifyAsync(Guid generationRunId, string eventName, string? step, string? detail,
             CancellationToken cancellationToken = default, long? elapsedMsSinceRunStart = null,
-            long? stepDurationMs = null, Guid? llmCallId = null) =>
+            long? stepDurationMs = null,         Guid? llmCallId = null,
+        string? workingDocumentText = null,
+        int? documentRevision = null) =>
             Task.CompletedTask;
     }
 }

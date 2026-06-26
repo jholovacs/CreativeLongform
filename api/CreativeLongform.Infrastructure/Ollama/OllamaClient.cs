@@ -62,8 +62,12 @@ public sealed class OllamaClient : IOllamaClient
                 payload["options"] = ollamaOpts;
         }
 
-        using var response = await _http.PostAsJsonAsync(
-            OllamaBaseUrlHelper.ApiEndpoint(apiRoot, "chat"), payload, cancellationToken);
+        using var request = new HttpRequestMessage(HttpMethod.Post, OllamaBaseUrlHelper.ApiEndpoint(apiRoot, "chat"))
+        {
+            Content = JsonContent.Create(payload)
+        };
+        using var response = await _http.SendAsync(
+            request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             var hint =

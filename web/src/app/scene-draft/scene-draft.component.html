@@ -102,8 +102,8 @@
       }
       <p class="hint">
         Edit freely, use <strong>Suggest improvements</strong> for optional LLM analysis and proposals, run
-        <strong>Correct With LLM</strong> when you want a targeted revision, or finalize to build the end-state table. With text
-        selected, correction applies only to that selection.
+        <strong>Correct With LLM</strong> to let the agent plan and apply your instruction (with compliance and quality checks),
+        or finalize to build the end-state table. With text selected, the agent prioritizes that passage.
       </p>
       <label for="draft-body">Draft</label>
       <div class="draft-stack">
@@ -122,7 +122,7 @@
           class="draft-textarea"
           rows="18"
           [(ngModel)]="draftText"
-          [disabled]="busy || correctModalOpen"
+          [disabled]="busy || correctModalOpen || correctProgressOpen"
           (focus)="onDraftFocus()"
           (blur)="onDraftBlur()"
           (scroll)="onDraftScroll()"
@@ -272,11 +272,11 @@
             type="text"
             [(ngModel)]="correctInstruction"
             placeholder="e.g. Sharpen the dialogue in the café beat"
-            [disabled]="busy || correctModalOpen"
+            [disabled]="busy || correctModalOpen || correctProgressOpen"
             [title]="fieldHelp.correctInstruction"
           />
         </label>
-        <button type="button" class="btn-with-icon" (click)="runCorrect()" [disabled]="busy || correctModalOpen || !generationRunId">
+        <button type="button" class="btn-with-icon" (click)="runCorrect()" [disabled]="busy || correctModalOpen || correctProgressOpen || !generationRunId">
           <app-ui-icon name="sparkles" />
           Correct With LLM
         </button>
@@ -284,7 +284,7 @@
           type="button"
           class="primary btn-with-icon"
           (click)="finalizeDraft()"
-          [disabled]="busy || correctModalOpen || !generationRunId"
+          [disabled]="busy || correctModalOpen || correctProgressOpen || !generationRunId"
         >
           <app-ui-icon name="check" />
           Accept &amp; Finalize (State Table)
@@ -322,14 +322,39 @@
 
   <app-llm-working-indicator [visible]="draftLlmWorkingVisible" [label]="draftLlmWorkingLabel" />
 
+  @if (correctProgressOpen) {
+    <app-agent-progress-modal
+      title="Correct With LLM"
+      hint="The agent is planning and applying your instruction. The draft below and the page textarea update live as edits apply."
+      documentLabel="Draft"
+      [documentParagraphs]="correctDocParagraphs"
+      [changedParagraphIndices]="correctChangedParagraphIndices"
+      [documentRevision]="correctDocRevision"
+      [changeSummary]="correctDocChangeSummary"
+      [logEntries]="correctLogEntries"
+      [nowLabel]="correctNowLabel"
+      [busy]="busy"
+      [showCancel]="true"
+    >
+      <div agentProgressActions class="agent-progress-actions">
+        @if (busy) {
+          <button type="button" class="danger btn-with-icon" (click)="cancelReviewDraftRequest()">
+            <app-ui-icon name="x" />
+            Cancel correction
+          </button>
+        }
+      </div>
+    </app-agent-progress-modal>
+  }
+
   @if (correctModalOpen) {
     <div class="correct-modal-root" role="dialog" aria-modal="true" aria-labelledby="correct-modal-title">
       <div class="correct-modal-backdrop" tabindex="-1"></div>
       <div class="correct-modal-panel">
         <h2 id="correct-modal-title" class="correct-modal-title">Review LLM correction</h2>
         <p class="hint correct-modal-hint">
-          The model has proposed new draft text. Edit it below if needed, then accept to keep it or reject to restore your
-          previous draft and end-state preview.
+          The agent planned and applied your correction (running compliance and quality checks). Edit the proposed draft below if
+          needed, then accept to keep it or reject to restore your previous draft and end-state preview.
         </p>
         <label for="correct-modal-body" class="correct-modal-label">Proposed draft</label>
         <textarea

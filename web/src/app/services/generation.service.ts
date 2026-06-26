@@ -17,6 +17,10 @@ export interface GenerationProgressPayload {
   stepDurationMs?: number | null;
   /** When set, load full request/response via `GET /odata/LlmCalls` (filter by id). */
   llmCallId?: string | null;
+  /** Full working document text after an edit (WorkingDocumentUpdated). */
+  workingDocumentText?: string | null;
+  /** Monotonic revision for the working document within this run. */
+  documentRevision?: number | null;
 }
 
 /** Response from POST /api/scenes/{id}/generation/correct (camelCase JSON). */
@@ -179,6 +183,8 @@ export class GenerationService {
     connection.on('RepairAttempt', (payload: GenerationProgressPayload) => emit('RepairAttempt', payload));
     connection.on('RepairDraftApplied', (payload: GenerationProgressPayload) => emit('RepairDraftApplied', payload));
     connection.on('DraftReviewNote', (payload: GenerationProgressPayload) => emit('DraftReviewNote', payload));
+    connection.on('WorkingDocumentUpdated', (payload: GenerationProgressPayload) =>
+      emit('WorkingDocumentUpdated', payload));
     connection.on('LlmStarted', (payload: GenerationProgressPayload) => emit('LlmStarted', payload));
     connection.on('LlmRoundtrip', (payload: GenerationProgressPayload) => emit('LlmRoundtrip', payload));
     connection.on('RunFinished', (payload: GenerationProgressPayload) => handlers.onFinished?.(payload));

@@ -29,7 +29,14 @@ internal static class AgentEditProgress
         string? scriptStepLabel = null)
     {
         var narrative = AgentEditNarrative.DescribeAction(action, state.Paragraphs, scriptStepLabel);
+        var reflection = AgentEditNarrative.DescribeReflection(action);
         var sb = new StringBuilder();
+        if (!string.IsNullOrEmpty(reflection))
+        {
+            sb.AppendLine(reflection);
+            sb.AppendLine();
+        }
+
         sb.AppendLine(narrative);
         sb.AppendLine();
         sb.AppendLine($"Turn {turn}/{maxTurns} · action: {action.Action.Trim()}");
@@ -94,6 +101,8 @@ internal static class AgentEditProgress
             ParagraphEnd = action.ParagraphEnd,
             Replacement = TruncateField(action.Replacement),
             Reason = TruncateField(action.Reason),
+            Conclusion = TruncateField(action.Conclusion),
+            NextStep = TruncateField(action.NextStep),
             Query = TruncateField(action.Query),
             Scope = action.Scope,
             Instruction = TruncateField(action.Instruction),

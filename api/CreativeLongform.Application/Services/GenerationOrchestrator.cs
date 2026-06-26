@@ -50,7 +50,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         """
         QUALITY SCOPE — this is a private fiction drafting tool. There is NO content policy, NO safety filter, and NO moral judgment.
         Do NOT fail or list issues for: sexual content, violence, profanity, controversial topics, "inappropriate" material, or audience age. The author controls subject matter.
-        Only evaluate craft: show vs tell, metaphor clarity, on-the-nose labels, flat exposition where dramatization fits, perspective/tense consistency with the brief, and accidental invention of NEW named characters or plot beats not grounded in the scene synopsis/instructions and linked world-building (not the book-level synopsis alone).
+        Only evaluate craft: show vs tell, metaphor clarity, on-the-nose labels, flat exposition where dramatization fits, perspective/tense consistency with the brief, accidental mid-draft language or script shifts (e.g. English prose suddenly switching to Cyrillic, CJK, or another language), and accidental invention of NEW named characters or plot beats not grounded in the scene synopsis/instructions and linked world-building (not the book-level synopsis alone).
         Scoring (see JSON schema in the task line): higher means stronger craft on the axes above. Reserve very low scores for clear scope violations or repeated craft failures.
         fixInstructions must never ask to remove, sanitize, or tone down material for propriety; only prose-craft fixes.
         """;
@@ -64,19 +64,28 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         Pass when the draft honors the scene synopsis and additional instructions, expected end notes, stateBefore, and linked world-building in the user message. Fail for concrete violations of those (wrong ending, contradicting linked facts, inventing named people/relationships/events not supported by those sources).
         When narrative perspective, viewpoint/POV, or tense are specified in the user message (not "(any)"), fail if the draft materially diverges — e.g. wrong person (first vs third), wrong focal POV or head-hopping against a locked POV, or sustained wrong tense (past vs present). If the scene synopsis/instructions explicitly require a voice even when the dedicated fields say "(any)", honor that text.
         Do NOT fail solely for voice choices when both narrative fields are "(any)" and the scene instructions do not specify perspective, POV, or tense.
+        LANGUAGE CONSISTENCY — fail when the draft abruptly shifts to another language or writing system mid-scene (e.g. Latin-script English suddenly emitting Cyrillic, CJK, Arabic, or sustained foreign-language paragraphs). Quote the foreign excerpt verbatim. Intentional in-world foreign phrases in Latin script are fine when brief and contextually grounded.
         GRAMMAR & PUNCTUATION — fail for clear, objective errors that distract a reader: run-on sentences or comma splices, subject-verb disagreement, mismatched quotation marks or apostrophes, wrong homophones (their/there/they're), missing end punctuation on complete sentences, doubled words, and similar mechanical mistakes. Do NOT fail for dialect, intentional fragments in character voice, or debatable style preferences (Oxford comma, em dash vs comma).
         Do NOT fail because the draft omits characters, subplots, or future book-level beats that appear only in the book synopsis line (series overview) but are not required by this scene’s synopsis/instructions, linked elements, or state. The book synopsis is mood and continuity context, not a per-scene requirement list.
         Do NOT fail because the scene draft is a narrow slice of the book synopsis — scenes are allowed to be partial.
         If the scene synopsis reads like an outline or mentions ideas for later chapters, treat those as guidance for this scene only where they clearly apply; do not require every outline bullet to appear as prose.
+        CHARACTER INTRODUCTION vs INVENTION — do not conflate them:
+        - AUTHORIZED CAST: Named people in the scene synopsis/instructions, stateBefore.characters[], or linked world-building (Character-kind elements and relationship lines) are allowed in the draft — including their first on-page appearance when the scene brief calls for introducing or meeting them.
+        - ON-PAGE INTRODUCTION: If the draft names and establishes a character (dialogue, description, role, relationship) before later references in the same draft, that character IS introduced — do NOT flag later mentions as "unintroduced" or "invented".
+        - Only fail for names with no grounding in scene brief, stateBefore, linked lore, AND no introduction beat anywhere in the draft you are checking.
+        - Do NOT fail because someone is missing from stateBefore if they are named in scene instructions/synopsis or clearly introduced in the prose. stateBefore is entry snapshot, not an exhaustive cast list for the whole scene.
+        - Accept reasonable name variants (nickname, given name vs full name) when clearly the same authorized person.
         """;
 
     /// <summary>Requires compliance critic to quote draft evidence in every violation and fix instruction.</summary>
     private const string ComplianceCitationRule =
         """
         COMPLIANCE CITATIONS — every string in "violations" and "fixInstructions" MUST be specific and actionable:
-        - Quote the exact offending phrase or sentence (≤30 words) OR pinpoint location (e.g. "¶2, second sentence").
+        - Quote the exact offending phrase or sentence (≤30 words) copied verbatim from the draft section below — not from stateBefore, synopsis, world-building, or this prompt.
         - Name the rule broken (scene instruction, canon, POV/tense, grammar/punctuation, show-don't-tell, etc.).
-        - In fixInstructions, state the minimal change (e.g. 'Change "He were" to "He was" in ¶1' or 'Add closing quote after …said Mara"').
+        - In fixInstructions, use ONLY words that appear in the draft (e.g. Change "[exact phrase from draft]" to "[corrected phrase]" in ¶N).
+        - NEVER restate rule categories alone (e.g. never output only "Invented characters or relationships" with no draft quote).
+        - NEVER reuse example wording from this prompt as violations or fixes. Never cite character names that do not appear in the draft.
         Never output vague entries like "fix grammar", "improve punctuation", or "wrong POV" without quoted evidence from the draft.
         """;
 
@@ -208,6 +217,8 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
                 return existing.Id;
         }
 
+        await CancelActiveRunsForSceneAsync(db, sceneId);
+
         var run = new GenerationRun
         {
             Id = Guid.NewGuid(),
@@ -255,7 +266,23 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             return false;
         if (run.Status is not (GenerationRunStatus.Pending or GenerationRunStatus.Running))
             return false;
-        return _cancellationRegistry.TryCancel(generationRunId);
+        _cancellationRegistry.TryCancel(generationRunId);
+        await PersistCancelledRunAsync(generationRunId, pipelineSw: null);
+        return true;
+    }
+
+    private async Task CancelActiveRunsForSceneAsync(ICreativeLongformDbContext db, Guid sceneId)
+    {
+        var activeRunIds = await db.GenerationRuns.AsNoTracking()
+            .Where(r => r.SceneId == sceneId &&
+                        (r.Status == GenerationRunStatus.Pending || r.Status == GenerationRunStatus.Running))
+            .Select(r => r.Id)
+            .ToListAsync();
+        foreach (var activeRunId in activeRunIds)
+        {
+            _cancellationRegistry.TryCancel(activeRunId);
+            await PersistCancelledRunAsync(activeRunId, pipelineSw: null);
+        }
     }
 
     public async Task<FinalizeGenerationResult> FinalizeGenerationAsync(Guid sceneId, Guid generationRunId,
@@ -582,14 +609,95 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             .OrderByDescending(s => s.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
         var stateBeforeJson = preSnap?.StateJson ?? "{}";
+        var authorizedCastBlock = BuildAuthorizedCastBlock(stateBeforeJson, worldElements, scene);
 
-        await notifier.NotifyAsync(generationRunId, "StepStarted", nameof(PipelineStep.Draft),
-            $"Correcting draft with model «{writer}» (user instruction).", cancellationToken,
+        var critic = await modelPrefs.GetCriticModelAsync(cancellationToken);
+        var correctionModel = EffectiveCorrectionModel(critic);
+        var editor = await modelPrefs.GetEditorModelAsync(cancellationToken);
+        var agentModel = await modelPrefs.GetAgentModelAsync(cancellationToken);
+        var agentTurns = Math.Max(1, _ollamaOptions.Value.AgenticEditMaxTurns);
+        var agentPredict = Math.Max(512, _ollamaOptions.Value.AgenticEditNumPredict);
+        var (qualityReviewMin, _) = GetQualityScoreThresholds(run);
+
+        var bookElements = await db.WorldElements.AsNoTracking()
+            .Where(e => e.BookId == book.Id)
+            .ToListAsync(cancellationToken);
+        var bookElementIds = bookElements.Select(e => e.Id).ToHashSet();
+        var bookLinks = await db.WorldElementLinks.AsNoTracking()
+            .Where(l => bookElementIds.Contains(l.FromWorldElementId) && bookElementIds.Contains(l.ToWorldElementId))
+            .ToListAsync(cancellationToken);
+        var bookScenes = await db.Scenes.AsNoTracking()
+            .Where(s => s.Chapter.BookId == book.Id)
+            .Include(s => s.Chapter)
+            .Include(s => s.TimelineEntry)
+            .OrderBy(s => s.Chapter!.Order)
+            .ThenBy(s => s.Order)
+            .ToListAsync(cancellationToken);
+        var lore = AgentLoreCatalog.Create(book, worldElements, scopedLinks, bookElements, bookLinks);
+
+        await notifier.NotifyAsync(generationRunId, "StepStarted", nameof(PipelineStep.AgentEdit),
+            $"Correct With LLM: agent planning and applying «{ins}» (model «{agentModel}»).", cancellationToken,
             correctSw.ElapsedMilliseconds, null, null);
-        var text = await RepairDraftWithUserInstructionAsync(db, ollama, writer, run, scene, draft, ins, worldBlock,
-            stateBeforeJson, selectionStart, selectionEnd, cancellationToken, correctProgress);
+
+        const int workingDocRevision = 1;
+        await WorkingDocumentNotifier.NotifyAsync(
+            notifier, generationRunId, workingDocRevision, draft,
+            "Correction session opened (current draft)", correctProgress.ElapsedMs, cancellationToken);
+
+        var agentOptions = new AgentEditRunOptions
+        {
+            StateBeforeJson = stateBeforeJson,
+            AuthorizedCastBlock = authorizedCastBlock,
+            Lore = lore,
+            Timeline = AgentSceneContextCatalog.Create(book, scene, bookScenes),
+            BookDirectiveBlock = AgentBookDirectives.Format(book),
+            UserCorrectionMission = ins,
+            SelectionStart = selectionStart,
+            SelectionEnd = selectionEnd,
+            InitialWorkingDocumentRevision = workingDocRevision,
+            MaxComplianceChecks = Math.Max(1, _ollamaOptions.Value.AgenticEditMaxComplianceChecks),
+            MaxQualityChecks = Math.Max(1, _ollamaOptions.Value.AgenticEditMaxQualityChecks),
+            MaxConsecutiveToolFailures = Math.Max(1, _ollamaOptions.Value.AgenticEditMaxConsecutiveFailures),
+            QualityReviewMinScore = qualityReviewMin,
+            RequireQualityBeforeFinish = _ollamaOptions.Value.QualityGateEnabled,
+            RunComplianceAsync = (draftText, ct) =>
+                EvaluateComplianceVerdictAsync(db, ollama, critic, run.Id, scene, stateBeforeJson, draftText, worldBlock,
+                    authorizedCastBlock, correctProgress, ct),
+            RunQualityAsync = _ollamaOptions.Value.QualityGateEnabled
+                ? (draftText, ct) =>
+                    EvaluateQualityVerdictAsync(db, ollama, critic, run.Id, scene, stateBeforeJson, draftText, worldBlock,
+                        correctProgress, ct)
+                : null,
+            InvokeWriterAsync = (req, ct) =>
+                InvokeAgentWriterParagraphAsync(db, ollama, writer, run, scene, stateBeforeJson, worldBlock, req, correctProgress, ct),
+            InvokeCorrectorAsync = (req, ct) =>
+                InvokeAgentCorrectorParagraphAsync(db, ollama, correctionModel, run, scene, req, correctProgress, ct),
+            InvokeEditorAsync = (req, ct) =>
+                InvokeAgentEditorParagraphAsync(db, ollama, editor, run, scene, stateBeforeJson, worldBlock, req, correctProgress, ct)
+        };
+
+        var text = await AgenticEditLoop.RunAsync(
+            draft,
+            SceneInstructionsForAgent(scene),
+            scene.ExpectedEndStateNotes,
+            worldBlock,
+            agentTurns,
+            _logger,
+            async (system, user, ct) =>
+            {
+                var o = new OllamaChatOptions { NumPredict = agentPredict };
+                return await ChatAndLogForRunAsync(db, ollama, agentModel, run.Id, PipelineStep.AgentEdit, system, user,
+                    jsonFormat: true, o, ct, correctProgress, "Correct With LLM agent turn");
+            },
+            notifier,
+            generationRunId,
+            correctProgress.ElapsedMs,
+            cancellationToken,
+            agentOptions);
+        text = GuardDraftProse(text, generationRunId, "correct draft agent", stateBeforeJson);
+        await notifier.NotifyAsync(generationRunId, "StepCompleted", nameof(PipelineStep.AgentEdit),
+            "Correct With LLM agent finished.", cancellationToken, correctSw.ElapsedMilliseconds, null, null);
         text = ApplyLlmDraftFromModel(scene, text);
-        text = GuardDraftProse(text, generationRunId, "correct draft", stateBeforeJson);
         run.FinalDraftText = text;
         scene.LatestDraftText = text;
         await db.SaveChangesAsync(cancellationToken);
@@ -663,10 +771,15 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
                 "Pre-state: resolving beginning narrative state (author JSON, prior scene, or LLM).", cancellationToken);
             var stateBefore = await ResolveBeginningStateAsync(db, ollama, preStateModel, run, scene, worldBlock, runId, progress, cancellationToken);
             await SaveSnapshotAsync(db, runId, PipelineStep.PreState, stateBefore, cancellationToken);
+            var authorizedCastBlock = BuildAuthorizedCastBlock(stateBefore, worldElements, scene);
 
             await NotifyStepAsync(notifier, runId, PipelineStep.Draft, progress.ElapsedMs,
                 $"Draft: asking model «{writer}» to produce the scene prose.", cancellationToken);
             var draft = await GenerateDraftAsync(db, ollama, writer, run, scene, stateBefore, worldBlock, minWords, maxTargetWords, progress, cancellationToken);
+            var workingDocRevision = 1;
+            await WorkingDocumentNotifier.NotifyAsync(
+                notifier, runId, workingDocRevision, draft, "Initial draft from writer",
+                progress.ElapsedMs, cancellationToken);
 
             if (_ollamaOptions.Value.AgenticEditEnabled && _ollamaOptions.Value.AgenticEditMaxTurns > 0)
             {
@@ -692,13 +805,15 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
                 var agentOptions = new AgentEditRunOptions
                 {
                     StateBeforeJson = stateBefore,
+                    AuthorizedCastBlock = authorizedCastBlock,
                     Lore = lore,
                     MaxComplianceChecks = Math.Max(1, _ollamaOptions.Value.AgenticEditMaxComplianceChecks),
                     MaxConsecutiveToolFailures = Math.Max(1, _ollamaOptions.Value.AgenticEditMaxConsecutiveFailures),
                     BookDirectiveBlock = AgentBookDirectives.Format(book),
                     Timeline = AgentSceneContextCatalog.Create(book, scene, bookScenes),
+                    InitialWorkingDocumentRevision = workingDocRevision,
                     RunComplianceAsync = (draftText, ct) =>
-                        EvaluateComplianceVerdictAsync(db, ollama, critic, run.Id, scene, stateBefore, draftText, worldBlock, progress, ct),
+                        EvaluateComplianceVerdictAsync(db, ollama, critic, run.Id, scene, stateBefore, draftText, worldBlock, authorizedCastBlock, progress, ct),
                     InvokeWriterAsync = (req, ct) =>
                         InvokeAgentWriterParagraphAsync(db, ollama, writer, run, scene, stateBefore, worldBlock, req, progress, ct),
                     InvokeCorrectorAsync = (req, ct) =>
@@ -748,7 +863,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
             await NotifyStepAsync(notifier, runId, PipelineStep.Compliance, progress.ElapsedMs,
                 "Compliance: checking scene instructions, narrative voice, grammar/punctuation, and world context.", cancellationToken);
-            var lastCompliance = await EvaluateComplianceAsync(db, ollama, critic, run, scene, stateBefore, text, worldBlock, progress, cancellationToken);
+            var lastCompliance = await EvaluateComplianceAsync(db, ollama, critic, run, scene, stateBefore, text, worldBlock, authorizedCastBlock, progress, cancellationToken);
             if (!lastCompliance.Pass)
             {
                 await notifier.NotifyAsync(runId, "DraftReviewNote", PipelineStep.Compliance.ToString(),
@@ -783,6 +898,10 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
 
             if (run.StopAfterDraft)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (await IsRunCancelledAsync(db, runId, cancellationToken))
+                    return;
+
                 await NotifyStepAsync(notifier, runId, PipelineStep.PostState, progress.ElapsedMs,
                     "Post-state: deriving end-of-scene narrative table from the draft (for review).", cancellationToken);
                 var postStateForReview = await ResolvePostStateJsonAsync(
@@ -801,6 +920,10 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             }
             else
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (await IsRunCancelledAsync(db, runId, cancellationToken))
+                    return;
+
                 run.Status = GenerationRunStatus.Succeeded;
                 run.CompletedAt = DateTimeOffset.UtcNow;
                 await db.SaveChangesAsync(cancellationToken);
@@ -839,7 +962,19 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             scene.BeginningStateJson);
     }
 
-    private async Task PersistCancelledRunAsync(Guid runId, Stopwatch pipelineSw)
+    private static async Task<bool> IsRunCancelledAsync(
+        ICreativeLongformDbContext db,
+        Guid runId,
+        CancellationToken cancellationToken)
+    {
+        var status = await db.GenerationRuns.AsNoTracking()
+            .Where(r => r.Id == runId)
+            .Select(r => r.Status)
+            .FirstAsync(cancellationToken);
+        return status == GenerationRunStatus.Cancelled;
+    }
+
+    private async Task PersistCancelledRunAsync(Guid runId, Stopwatch? pipelineSw)
     {
         _logger.LogInformation("Generation cancelled for run {RunId}", runId);
         await using var scope = _scopeFactory.CreateAsyncScope();
@@ -853,7 +988,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         run.FailureReason = "Cancelled by user.";
         await db.SaveChangesAsync(CancellationToken.None);
         await notifier.NotifyAsync(runId, "RunFinished", "Cancelled",
-            "Generation was cancelled.", CancellationToken.None, pipelineSw.ElapsedMilliseconds, null, null);
+            "Generation was cancelled.", CancellationToken.None, pipelineSw?.ElapsedMilliseconds, null, null);
     }
 
     /// <summary>Links whose both endpoints are in the scene-attached element set (for prompt inclusion).</summary>
@@ -1723,6 +1858,9 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         return pass;
     }
 
+    private static string BuildAuthorizedCastBlock(string stateBefore, IReadOnlyList<WorldElement> linkedElements, Scene scene) =>
+        AuthorizedCastPromptBuilder.Build(stateBefore, linkedElements, SceneInstructionsForAgent(scene));
+
     private async Task<ComplianceVerdict> EvaluateComplianceAsync(
         ICreativeLongformDbContext db,
         IOllamaClient ollama,
@@ -1732,10 +1870,17 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         string stateBefore,
         string draft,
         string worldContextBlock,
+        string authorizedCastBlock,
         PipelineProgress? progress,
         CancellationToken cancellationToken)
     {
-        var verdict = await EvaluateComplianceVerdictAsync(db, ollama, model, run.Id, scene, stateBefore, draft, worldContextBlock, progress, cancellationToken);
+        var raw = await EvaluateComplianceVerdictAsync(db, ollama, model, run.Id, scene, stateBefore, draft, worldContextBlock, authorizedCastBlock, progress, cancellationToken);
+        var grounded = ComplianceVerdictGrounding.GroundAgainstDraft(draft, raw);
+        if (grounded.DroppedItems.Count > 0)
+            _logger.LogInformation("Compliance grounding dropped {Count} critic item(s) not evidenced in draft for run {RunId}",
+                grounded.DroppedItems.Count, run.Id);
+        var verdict = LanguageContextShiftDetector.MergeIntoCompliance(grounded.Verdict,
+            LanguageContextShiftDetector.Analyze(draft));
         await db.ComplianceEvaluations.AddAsync(new ComplianceEvaluation
         {
             Id = Guid.NewGuid(),
@@ -1759,6 +1904,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         string stateBefore,
         string draft,
         string worldContextBlock,
+        string authorizedCastBlock,
         PipelineProgress? progress,
         CancellationToken cancellationToken)
     {
@@ -1768,15 +1914,15 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             Required shape (always include every key): { "pass": boolean, "violations": string[], "fixInstructions": string[] }.
             You MUST set "pass" explicitly to true or false. Never output an empty object {}.
             If there are no violations, use "pass": true and empty arrays: "violations": [], "fixInstructions": [].
-            Violations: wrong ending vs scene instructions, invented characters or relationships or plot events not grounded in the scene synopsis/instructions (below), stateBefore, and linked world-building — not in the book-level synopsis alone. Ignored scene constraints, contradictions of linked world-building, narrative perspective/viewpoint/POV or tense that does not match the scene brief when specified, clear grammar or punctuation errors, undue telling or labeled emotion where the brief allows dramatization (show, don't tell).
-            fixInstructions: minimal edits to fix issues while preserving plot, voice, and authorized facts; cite the exact text to change; for voice mismatches, rewrite to the required perspective, POV, and tense; for grammar/punctuation, give the corrected wording.
+            Violations: concrete issues in the draft section only — wrong ending vs scene instructions; invented named people/relationships/events with quoted draft evidence; ignored scene constraints; contradictions of linked world-building; POV/tense mismatch when specified; clear grammar/punctuation errors with quoted offending text; undue telling where the brief expects dramatization. Each violation MUST include a verbatim quote from the draft or a ¶ index plus quoted words. Do NOT output rule headings without draft evidence. Do NOT list characters as "unintroduced" or "invented" when they are named in the scene brief, listed in stateBefore, in linked world-building, or clearly introduced on-page earlier in the same draft.
+            fixInstructions: minimal edits to fix issues while preserving plot, voice, and authorized facts; every fix MUST quote exact current draft text to locate the change; for voice mismatches, rewrite to the required perspective, POV, and tense; for grammar/punctuation, give the corrected wording using words from the draft.
             """
             + ComplianceCitationRule
             + ComplianceCheckerScope
             + ShowDontTellEmphasis
             + InventionScopeHardRule
             + """
-            Treat any invented named character, relationship, or story event outside the scene brief, stateBefore, and linked world-building as a compliance failure — not merely because the book synopsis elsewhere mentions different characters or future plot.
+            Treat any invented named character, relationship, or story event outside the scene brief, stateBefore, and linked world-building as a compliance failure — cite the invented name or beat with a draft quote. Do not fail based on book synopsis alone.
             """;
         var user = $"""
             Scene synopsis and instructions:
@@ -1784,8 +1930,12 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             Narrative perspective (required when not "(any)"): {scene.NarrativePerspective ?? "(any)"}
             Narrative tense (required when not "(any)"): {scene.NarrativeTense ?? "(any)"}
             Expected end notes: {scene.ExpectedEndStateNotes ?? "(none)"}
-            stateBefore: {stateBefore}
-            draft: {draft}
+            stateBefore (continuity context — NOT the draft to check; do not quote stateBefore text as if it were draft prose): {stateBefore}
+
+            {authorizedCastBlock}
+
+            draft (ONLY this prose is under review — all violations and fixes must cite text from here):
+            {draft}
 
             {worldContextBlock}
             """;
@@ -1799,9 +1949,10 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
                 return t;
             },
             "instruction compliance");
-        return textOrNull is null
+        var raw = textOrNull is null
             ? new ComplianceVerdict { Pass = true, Violations = new List<string>(), FixInstructions = new List<string>() }
             : LlmJson.DeserializeComplianceVerdict(textOrNull);
+        return raw;
     }
 
     private async Task<string> InvokeAgentWriterParagraphAsync(
@@ -1858,7 +2009,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         var (text, _, _) = await ChatAndLogForRunAsync(db, ollama, model, run.Id, PipelineStep.AgentEdit, system, user,
             jsonFormat: false, proseOptions, cancellationToken: cancellationToken, progress,
             AgentDelegationWaitLabel("Writer", req));
-        return DraftProseGuard.TrimRepetitiveLoops(text.Trim());
+        return DraftProseGuard.TrimRepetitiveLoops(LlmProseSanitizer.ProseForApplication(text).Trim());
     }
 
     private async Task<string> InvokeAgentCorrectorParagraphAsync(
@@ -1901,7 +2052,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         var (text, _, _) = await ChatAndLogForRunAsync(db, ollama, model, run.Id, PipelineStep.AgentEdit, system, user,
             jsonFormat: false, options, cancellationToken: cancellationToken, progress,
             AgentDelegationWaitLabel("Corrector", req));
-        return DraftProseGuard.TrimRepetitiveLoops(text.Trim());
+        return DraftProseGuard.TrimRepetitiveLoops(LlmProseSanitizer.ProseForApplication(text).Trim());
     }
 
     private async Task<string> InvokeAgentEditorParagraphAsync(
@@ -1956,14 +2107,14 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         var (text, _, _) = await ChatAndLogForRunAsync(db, ollama, model, run.Id, PipelineStep.AgentEdit, system, user,
             jsonFormat: false, options, cancellationToken: cancellationToken, progress,
             AgentDelegationWaitLabel("Editor", req));
-        return DraftProseGuard.TrimRepetitiveLoops(text.Trim());
+        return DraftProseGuard.TrimRepetitiveLoops(LlmProseSanitizer.ProseForApplication(text).Trim());
     }
 
-    private async Task<QualityVerdict> EvaluateQualityAsync(
+    private async Task<QualityVerdict> EvaluateQualityVerdictAsync(
         ICreativeLongformDbContext db,
         IOllamaClient ollama,
         string model,
-        GenerationRun run,
+        Guid generationRunId,
         Scene scene,
         string stateBefore,
         string draft,
@@ -2004,7 +2155,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         var textOrNull = await ChatJsonOrNullIfEmptyAfterRetryAsync(
             async () =>
             {
-                var (t, _, _) = await ChatAndLogForRunAsync(db, ollama, model, run.Id, PipelineStep.Quality, system, user,
+                var (t, _, _) = await ChatAndLogForRunAsync(db, ollama, model, generationRunId, PipelineStep.Quality, system, user,
                     jsonFormat: true, qualityOptions, cancellationToken: cancellationToken, progress,
                     "Prose quality critique");
                 return t;
@@ -2015,6 +2166,23 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             : LlmJson.Deserialize<QualityVerdict>(textOrNull)
               ?? new QualityVerdict { Issues = new List<string>(), FixInstructions = new List<string>() };
         verdict = NormalizeQualityVerdict(verdict);
+        return LanguageContextShiftDetector.MergeIntoQuality(verdict, LanguageContextShiftDetector.Analyze(draft));
+    }
+
+    private async Task<QualityVerdict> EvaluateQualityAsync(
+        ICreativeLongformDbContext db,
+        IOllamaClient ollama,
+        string model,
+        GenerationRun run,
+        Scene scene,
+        string stateBefore,
+        string draft,
+        string worldContextBlock,
+        PipelineProgress? progress,
+        CancellationToken cancellationToken)
+    {
+        var verdict = await EvaluateQualityVerdictAsync(db, ollama, model, run.Id, scene, stateBefore, draft, worldContextBlock,
+            progress, cancellationToken);
         var (reviewMin, _) = GetQualityScoreThresholds(run);
         await db.ComplianceEvaluations.AddAsync(new ComplianceEvaluation
         {
@@ -2129,104 +2297,6 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         if (review > accept)
             (review, accept) = (accept, review);
         return (review, accept);
-    }
-
-    private async Task<string> RepairDraftWithUserInstructionAsync(
-        ICreativeLongformDbContext db,
-        IOllamaClient ollama,
-        string model,
-        GenerationRun run,
-        Scene scene,
-        string draft,
-        string userInstruction,
-        string worldContextBlock,
-        string stateBeforeJson,
-        int? selectionStart,
-        int? selectionEnd,
-        CancellationToken cancellationToken,
-        PipelineProgress? progress = null)
-    {
-        var proseOptions = CreateDraftProseOptions(Math.Max(1024, _ollamaOptions.Value.DraftNumPredict));
-        var perspective = scene.NarrativePerspective ?? "(infer from story tone if not specified)";
-        var tense = scene.NarrativeTense ?? "(infer from story tone if not specified)";
-        var continuityBrief = NarrativeStateContinuityBriefBuilder.BuildForDraftPrompt(stateBeforeJson);
-        var sceneBlock = $"""
-            Narrative perspective (follow strictly): {perspective}
-            Narrative tense (follow strictly): {tense}
-
-            Scene synopsis and instructions:
-            {SceneInstructionsForAgent(scene)}
-            Expected end notes (if any): {scene.ExpectedEndStateNotes ?? "(none)"}
-            {continuityBrief}
-            """;
-
-        if (selectionStart is int start && selectionEnd is int end && end > start)
-        {
-            var selected = draft[start..end];
-            var system =
-                """
-                You replace one selected passage of fiction prose according to the author's instruction. The user message includes the full draft for context only.
-                """
-                + InventionScopeHardRule
-                + ShowDontTellEmphasis
-                + BeginningStateContinuityForProseRule
-                + """
-                OUTPUT FORMAT — output ONLY valid JSON: {"replacement":"..."}. The "replacement" string is the new prose for the selected passage only (not the whole scene). Match voice, tense, and perspective of the surrounding draft. No markdown fences, no extra keys, no explanation.
-                """;
-            var user = $"""
-                [SELECTION MODE — UTF-16 indices {start}..{end} exclusive]
-
-                {sceneBlock}
-
-                Full draft for context (do not output this in full — only the JSON replacement field):
-                ---
-                {draft}
-                ---
-
-                Selected passage to replace (verbatim from the draft):
-                ---
-                {selected}
-                ---
-
-                Author instruction (applies to the selected passage only):
-                {userInstruction}
-
-                {worldContextBlock}
-                """;
-            var (text, _, _) = await ChatAndLogForRunAsync(db, ollama, model, run.Id, PipelineStep.Repair, system, user,
-                jsonFormat: true, proseOptions, cancellationToken: cancellationToken, progress,
-                "Correct draft (selection replacement JSON)");
-            var parsed = LlmJson.Deserialize<DraftReplacementJson>(text)
-                         ?? throw new InvalidOperationException("Model did not return valid replacement JSON.");
-            var replacement = parsed.Replacement ?? "";
-            return draft[..start] + replacement + draft[end..];
-        }
-
-        var systemFull =
-            """
-            You revise fiction prose according to the author's explicit instructions. Preserve continuity and voice unless the author asks otherwise.
-            """
-            + InventionScopeHardRule
-            + ShowDontTellEmphasis
-            + BeginningStateContinuityForProseRule
-            + """
-            Output prose only, no preamble.
-            """;
-        var userFull = $"""
-            {sceneBlock}
-
-            Author instruction:
-            {userInstruction}
-
-            Current draft (revise as a whole per instruction):
-            {draft}
-
-            {worldContextBlock}
-            """;
-        var (textFull, _, _) = await ChatAndLogForRunAsync(db, ollama, model, run.Id, PipelineStep.Repair, systemFull, userFull,
-            jsonFormat: false, proseOptions, cancellationToken: cancellationToken, progress,
-            "Correct draft (full revision)");
-        return textFull.Trim();
     }
 
     private static string BuildComplianceIssuesOnlyDetail(ComplianceVerdict v)

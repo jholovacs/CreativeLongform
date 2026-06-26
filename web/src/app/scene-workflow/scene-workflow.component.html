@@ -828,18 +828,43 @@
         </button>
       </div>
       <p class="hint">
-        Live updates from the server: pipeline phases, each LLM call (timings in the header; use “Load full LLM request &amp;
-        response” to pull the saved request and output from the database), agent actions and tool responses (each turn logs
-        what the agent chose and what the tool returned), compliance/quality notes, and timings. While a model call is running,
-        the status line above the buttons shows what the server is waiting on.
+        Live updates from the server: pipeline phases, each LLM call, agent actions, and the
+        <strong>working document</strong> (one draft that updates in place as edits apply). Changed paragraphs flash briefly
+        after each revision. Model reasoning in <code>&lt;thinking&gt;</code> tags is stripped before text is applied.
       </p>
-      <div
-        class="gen-log-scroll"
-        role="log"
-        aria-live="polite"
-        aria-relevant="additions"
-        aria-sort="descending"
-      >
+      <div class="gen-log-body">
+        <section class="gen-working-doc" aria-label="Working document">
+          <div class="gen-working-doc-header">
+            <h3>Working document</h3>
+            @if (workingDocumentRevision > 0) {
+              <span class="gen-working-doc-meta">rev {{ workingDocumentRevision }}</span>
+            }
+            @if (workingDocumentChangeSummary) {
+              <span class="gen-working-doc-change">{{ workingDocumentChangeSummary }}</span>
+            }
+          </div>
+          @if (workingDocumentText) {
+            <div class="gen-working-doc-scroll" #workingDocScroll>
+              @for (para of workingDocumentParagraphs; track $index) {
+                <p
+                  class="gen-working-doc-para"
+                  [class.gen-working-doc-para-changed]="workingDocumentChangedParagraphIndices.has($index)"
+                >
+                  {{ para }}
+                </p>
+              }
+            </div>
+          } @else {
+            <p class="hint gen-working-doc-empty">Waiting for the first draft…</p>
+          }
+        </section>
+        <div
+          class="gen-log-scroll"
+          role="log"
+          aria-live="polite"
+          aria-relevant="additions"
+          aria-sort="descending"
+        >
         @for (entry of generationLogEntries; track entry.id) {
           <article [class]="'gen-log-entry kind-' + entry.kind">
             <div class="gen-log-meta">
@@ -907,6 +932,7 @@
             }
           </article>
         }
+      </div>
       </div>
       <div class="gen-log-modal-footer">
         @if (busy && generationNowLabel) {

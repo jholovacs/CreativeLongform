@@ -65,6 +65,9 @@ public sealed class OllamaOptions
     /// <summary>Max compliance checks per agent edit session (each check is one critic LLM call).</summary>
     public int AgenticEditMaxComplianceChecks { get; set; } = 8;
 
+    /// <summary>Max quality checks per agent edit session (Correct With LLM and similar).</summary>
+    public int AgenticEditMaxQualityChecks { get; set; } = 8;
+
     /// <summary>Abort agent edit loop after this many consecutive tool/JSON failures.</summary>
     public int AgenticEditMaxConsecutiveFailures { get; set; } = 5;
 

@@ -1,5 +1,5 @@
 import { CommonModule, Location } from '@angular/common';
-import { Component, ElementRef, OnDestroy, OnInit, ViewChild, inject } from '@angular/core';
+import { ChangeDetectorRef, Component, ElementRef, NgZone, OnDestroy, OnInit, ViewChild, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { HubConnection } from '@microsoft/signalr';
@@ -10,12 +10,20 @@ import {
   getParagraphSelectionRangeInDraft
 } from '../core/draft-paragraph';
 import { ParsedComplianceVerdict, parseComplianceVerdictJson } from '../core/compliance-verdict-parse';
+import {
+  buildGenerationLogEntry,
+  diffWorkingDocument,
+  GenerationLogEntry,
+  generationNowLabelForEvent,
+  splitDraftParagraphs
+} from '../core/generation-progress-log';
 import { formatJsonPretty } from '../core/json-format';
 import { splitLlmThinkingFromProse } from '../core/llm-prose-sanitize';
 import { Book, Chapter, ComplianceEvaluation, Scene } from '../models/entities';
-import { CorrectDraftResponse, GenerationService } from '../services/generation.service';
+import { CorrectDraftResponse, GenerationProgressPayload, GenerationService } from '../services/generation.service';
 import { ODataService } from '../services/odata.service';
 import { DraftRecommendationItem, SceneWorkflowService } from '../services/scene-workflow.service';
+import { AgentProgressModalComponent } from '../shared/agent-progress-modal/agent-progress-modal.component';
 import { LlmWorkingIndicatorComponent } from '../shared/llm-working-indicator/llm-working-indicator.component';
 import { UiIconComponent } from '../shared/ui-icon.component';
 import { SCENE_WORKFLOW_FIELD_HELP } from '../scene-workflow/scene-workflow-field-help';
@@ -40,7 +48,7 @@ type SuggestionDiffPreview =
 @Component({
   selector: 'app-scene-draft',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, UiIconComponent, LlmWorkingIndicatorComponent],
+  imports: [CommonModule, FormsModule, RouterLink, UiIconComponent, LlmWorkingIndicatorComponent, AgentProgressModalComponent],
   templateUrl: './scene-draft.component.html',
   styleUrl: './scene-draft.component.scss'
 })
@@ -55,6 +63,8 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
   private readonly odata = inject(ODataService);
   private readonly generation = inject(GenerationService);
   private readonly sceneWorkflow = inject(SceneWorkflowService);
+  private readonly zone = inject(NgZone);
+  private readonly cdr = inject(ChangeDetectorRef);
 
   sceneId = '';
   bookId = '';
@@ -90,6 +100,13 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
   correctModalBusy = false;
   correctModalProposedText = '';
   correctModalEditedText = '';
+  correctProgressOpen = false;
+  correctLogEntries: GenerationLogEntry[] = [];
+  correctNowLabel: string | null = null;
+  correctDocParagraphs: string[] = [];
+  correctChangedParagraphIndices = new Set<number>();
+  correctDocRevision = 0;
+  correctDocChangeSummary: string | null = null;
   private draftTextSnapshotBeforeCorrect = '';
   private pendingPostSnapshotBeforeCorrect: string | null = null;
   private lastStateTableJsonSnapshotBeforeCorrect: string | null = null;
@@ -252,21 +269,82 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
     this.hubConnectedRunId = runId;
     this.hubConnection = this.generation.connectToRun(runId, {
       onProgress: (eventName, payload) => {
-        if (eventName !== 'DraftReviewNote') {
-          return;
-        }
-        const step = (payload.step ?? '').trim();
-        const detail = (payload.detail ?? '').trim();
-        if (!detail) {
-          return;
-        }
-        this.draftReviewNotes = [
-          { step: step || 'Compliance / quality', detail },
-          ...this.draftReviewNotes
-        ];
+        this.zone.run(() => {
+          if (this.correctProgressOpen) {
+            this.handleCorrectAgentProgress(eventName, payload);
+          } else if (eventName === 'DraftReviewNote') {
+            const step = (payload.step ?? '').trim();
+            const detail = (payload.detail ?? '').trim();
+            if (detail) {
+              this.draftReviewNotes = [{ step: step || 'Compliance / quality', detail }, ...this.draftReviewNotes];
+            }
+          }
+          this.cdr.markForCheck();
+        });
       },
       onFinished: () => {}
     });
+  }
+
+  private resetCorrectProgressState(): void {
+    this.correctLogEntries = [];
+    this.correctNowLabel = 'Starting agent correction…';
+    this.correctDocParagraphs = splitDraftParagraphs(this.draftText);
+    this.correctChangedParagraphIndices = new Set<number>();
+    this.correctDocRevision = 0;
+    this.correctDocChangeSummary = null;
+  }
+
+  private handleCorrectAgentProgress(eventName: string, p: GenerationProgressPayload): void {
+    if (eventName === 'WorkingDocumentUpdated') {
+      this.applyCorrectDraftUpdate(p);
+      return;
+    }
+
+    const now = generationNowLabelForEvent(eventName, p);
+    if (now) {
+      this.correctNowLabel = now;
+    }
+
+    if (
+      eventName === 'StepStarted' ||
+      eventName === 'StepCompleted' ||
+      eventName === 'AgentEditTurn' ||
+      eventName === 'AgentEditAction' ||
+      eventName === 'AgentEditResult' ||
+      eventName === 'AgentEditStatus' ||
+      eventName === 'LlmStarted' ||
+      eventName === 'LlmRoundtrip'
+    ) {
+      this.correctLogEntries = [buildGenerationLogEntry(eventName, p), ...this.correctLogEntries];
+    }
+  }
+
+  private applyCorrectDraftUpdate(p: GenerationProgressPayload): void {
+    const text = (p.workingDocumentText ?? '').trim();
+    if (!text) {
+      return;
+    }
+
+    const diff = diffWorkingDocument(this.correctDocParagraphs, text, p, this.correctDocRevision);
+    if (!diff) {
+      return;
+    }
+
+    this.draftText = text;
+    this.correctDocParagraphs = diff.paragraphs;
+    this.correctChangedParagraphIndices = diff.changedIndices;
+    this.correctDocRevision = diff.revision;
+    this.correctDocChangeSummary = diff.changeSummary;
+    this.correctNowLabel = diff.changeSummary;
+    this.correctLogEntries = [
+      buildGenerationLogEntry('WorkingDocumentUpdated', {
+        ...p,
+        step: diff.changeSummary,
+        detail: `Revision ${diff.revision} · ${diff.paragraphs.length} paragraph(s)`
+      }),
+      ...this.correctLogEntries
+    ];
   }
 
   private async disconnectComplianceHub(): Promise<void> {
@@ -283,14 +361,14 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
     return this.draftText.length > SceneDraftComponent.maxDraftCharsForAnalysis;
   }
 
-  /** Banner while correct/finalize or draft recommendations run (not modal PATCH). */
+  /** Banner while finalize or draft recommendations run (agent correction uses its own modal). */
   get draftLlmWorkingVisible(): boolean {
-    return this.busy || this.recommendationsBusy;
+    return (this.busy && !this.correctProgressOpen) || this.recommendationsBusy;
   }
 
   get draftLlmWorkingLabel(): string {
     if (this.recommendationsBusy) return 'Analyzing draft…';
-    return 'Model is working…';
+    return 'Agent correcting draft…';
   }
 
   get endStateSummary(): string {
@@ -486,6 +564,10 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
 
   cancelReviewDraftRequest(): void {
     this.reviewDraftSub?.unsubscribe();
+    if (this.correctProgressOpen) {
+      this.draftText = this.draftTextSnapshotBeforeCorrect;
+      this.correctProgressOpen = false;
+    }
     this.busy = false;
   }
 
@@ -499,6 +581,11 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
     this.draftTextSnapshotBeforeCorrect = this.draftText;
     this.pendingPostSnapshotBeforeCorrect = this.pendingPostStateRaw;
     this.lastStateTableJsonSnapshotBeforeCorrect = this.lastStateTableJson;
+    this.resetCorrectProgressState();
+    this.correctProgressOpen = true;
+    if (this.generationRunId) {
+      this.connectComplianceHub(this.generationRunId);
+    }
     this.reviewDraftSub?.unsubscribe();
     this.busy = true;
     this.error = null;
@@ -528,6 +615,7 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
     }
     this.reviewDraftSub = this.generation.correctDraft(this.sceneId, body).subscribe({
       next: (res: CorrectDraftResponse) => {
+        this.correctProgressOpen = false;
         this.correctInstruction = '';
         this.draftText = res.correctedDraftText;
         if (res.llmThinkingNotes?.trim()) {
@@ -545,6 +633,8 @@ export class SceneDraftComponent implements OnInit, OnDestroy {
         this.busy = false;
       },
       error: () => {
+        this.draftText = this.draftTextSnapshotBeforeCorrect;
+        this.correctProgressOpen = false;
         this.busy = false;
       }
     });

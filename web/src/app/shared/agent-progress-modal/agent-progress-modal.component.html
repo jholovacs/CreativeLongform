@@ -1,0 +1,63 @@
+<div class="agent-progress-root" role="dialog" aria-modal="true" [attr.aria-labelledby]="'agent-progress-title'">
+  <div class="agent-progress-backdrop" tabindex="-1" aria-hidden="true"></div>
+  <div class="agent-progress-panel">
+    <div class="agent-progress-header">
+      <h2 id="agent-progress-title">{{ title }}</h2>
+    </div>
+    @if (hint) {
+      <p class="hint agent-progress-hint">{{ hint }}</p>
+    }
+    <div class="agent-progress-body">
+      <section class="agent-progress-doc" [attr.aria-label]="documentLabel">
+        <div class="agent-progress-doc-header">
+          <h3>{{ documentLabel }}</h3>
+          @if (documentRevision > 0) {
+            <span class="agent-progress-doc-meta">rev {{ documentRevision }}</span>
+          }
+          @if (changeSummary) {
+            <span class="agent-progress-doc-change">{{ changeSummary }}</span>
+          }
+        </div>
+        @if (documentParagraphs.length > 0) {
+          <div class="agent-progress-doc-scroll">
+            @for (para of documentParagraphs; track $index) {
+              <p
+                class="agent-progress-doc-para"
+                [class.agent-progress-doc-para-changed]="changedParagraphIndices.has($index)"
+              >
+                {{ para }}
+              </p>
+            }
+          </div>
+        } @else {
+          <p class="hint agent-progress-doc-empty">Waiting for draft…</p>
+        }
+      </section>
+      <div class="agent-progress-log-scroll" role="log" aria-live="polite" aria-relevant="additions" aria-sort="descending">
+        @for (entry of logEntries; track entry.id) {
+          <article [class]="'agent-progress-log-entry kind-' + entry.kind">
+            <div class="agent-progress-log-meta">
+              <span class="agent-progress-log-time">{{ entry.at | date : 'mediumTime' }}</span>
+              <span class="agent-progress-log-badge">{{ formatEventBadgeLabel(entry.eventName) }}</span>
+              @if (entry.elapsedMs != null) {
+                <span class="agent-progress-log-elapsed">Run {{ formatDuration(entry.elapsedMs) }}</span>
+              }
+            </div>
+            <h4 class="agent-progress-log-title">{{ entry.title }}</h4>
+            @if (entry.detail) {
+              <p class="agent-progress-log-detail">{{ entry.detail }}</p>
+            }
+          </article>
+        }
+      </div>
+    </div>
+    <div class="agent-progress-footer">
+      @if (busy && nowLabel) {
+        <div class="agent-progress-now" role="status" aria-live="polite">
+          <app-llm-working-indicator placement="inline" [visible]="true" [label]="nowLabel" />
+        </div>
+      }
+      <ng-content select="[agentProgressActions]" />
+    </div>
+  </div>
+</div>

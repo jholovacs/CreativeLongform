@@ -1,3 +1,4 @@
+using System.Text;
 using CreativeLongform.Application.Generation;
 
 namespace CreativeLongform.Application.Services;
@@ -26,25 +27,75 @@ internal static class AgentEditNarrative
 
     public static string DescribeThinking(AgentEditLoopState state)
     {
+        var subject = BuildThinkingSubject(state);
+        if (!string.IsNullOrWhiteSpace(state.LastConclusion))
+        {
+            var recap = TruncatePlain(CollapseWhitespace(state.LastConclusion), 160);
+            return $"Agent is thinking about {subject} — last conclusion: {recap}";
+        }
+
+        return $"Agent is thinking about {subject}.";
+    }
+
+    /// <summary>Agent's stated conclusion and planned next step for the event log.</summary>
+    public static string DescribeReflection(AgentEditActionDto action)
+    {
+        var conclusion = CollapseWhitespace(FirstNonEmpty(action.Conclusion, action.Reason) ?? "");
+        var nextStep = CollapseWhitespace(action.NextStep ?? "");
+        if (string.IsNullOrEmpty(conclusion) && string.IsNullOrEmpty(nextStep))
+            return "";
+
+        var sb = new StringBuilder();
+        if (!string.IsNullOrEmpty(conclusion))
+            sb.Append("Agent concluded: ").AppendLine(TruncatePlain(conclusion, 320));
+        if (!string.IsNullOrEmpty(nextStep))
+            sb.Append("Next step: ").Append(TruncatePlain(nextStep, 240));
+        else if (!string.IsNullOrWhiteSpace(action.Action))
+            sb.Append("Next step: ").Append(TruncatePlain(DescribeActionSummary(action), 240));
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private static string BuildThinkingSubject(AgentEditLoopState state)
+    {
         if (!string.IsNullOrWhiteSpace(state.LastNarrativeHint))
-            return $"Agent is thinking about {state.LastNarrativeHint}.";
+            return state.LastNarrativeHint.Trim();
 
         if (state.LastToolName is null && state.ComplianceCheckCount == 0)
-            return "Agent is reviewing the draft and planning the first edit.";
+            return "the draft and how to begin editing";
 
         return state.LastToolName switch
         {
-            "invoke_writer" => "Agent is thinking about the Writer's rewrite and what to do next.",
-            "invoke_editor" => "Agent is thinking about the Editor's rewrite and what to do next.",
-            "invoke_corrector" => "Agent is thinking about the Corrector's fixes and what to do next.",
-            "run_compliance_check" => "Agent is thinking about the compliance results and what still needs fixing.",
-            "read_section" => "Agent is thinking about the passage it just read.",
-            "find_text" => "Agent is thinking about the search matches.",
-            "replace_text" or "patch_text" or "swap_text" or "propose_patch" => "Agent is thinking about the edit it just applied.",
-            "run_script" => "Agent is thinking about the script results.",
-            "query_lore" => "Agent is thinking about the lore it found.",
-            "query_timeline" => "Agent is thinking about other scenes in the timeline.",
-            _ => "Agent is thinking about the last step and deciding what to do next."
+            "invoke_writer" => "the Writer's rewrite and what to do next",
+            "invoke_editor" => "the Editor's rewrite and what to do next",
+            "invoke_corrector" => "the Corrector's fixes and what to do next",
+            "run_compliance_check" => "the compliance results and what still needs fixing",
+            "read_section" => "the passage it just read",
+            "find_text" => "the search matches",
+            "replace_text" or "patch_text" or "swap_text" or "propose_patch" => "the edit it just applied",
+            "run_script" => "the script results",
+            "query_lore" => "the lore it found",
+            "query_timeline" => "other scenes in the timeline",
+            _ => "the last step and deciding what to do next"
+        };
+    }
+
+    private static string DescribeActionSummary(AgentEditActionDto action)
+    {
+        var kind = action.Action.Trim().ToLowerInvariant();
+        return kind switch
+        {
+            "run_compliance_check" => "Run a compliance check on the current draft.",
+            "finish" => "Finish editing the draft.",
+            "read_section" => $"Read {DescribeParagraphRange(action)}.",
+            "find_text" => $"Search for {OptionalQuote(action.Pattern ?? action.Query, "the target text")}.",
+            "replace_text" => $"Replace {OptionalQuote(action.Pattern, "a pattern")}.",
+            "swap_text" => "Swap the two selected excerpts.",
+            "run_script" => $"Run a script with {action.Steps?.Count ?? 0} step(s).",
+            "invoke_writer" => $"Invoke Writer on {DescribeParagraphRange(action)}.",
+            "invoke_editor" => $"Invoke Editor on {DescribeParagraphRange(action)}.",
+            "invoke_corrector" => $"Invoke Corrector on {DescribeParagraphRange(action)}.",
+            _ => $"Run {FriendlyToolName(kind)}."
         };
     }
 

@@ -39,10 +39,3 @@ public sealed class QualityVerdict
     [JsonPropertyName("fixInstructions")]
     public List<string> FixInstructions { get; set; } = new();
 }
-
-/// <summary>LLM output when replacing only a selected range of the draft (selectionEnd exclusive, same as HTML textarea).</summary>
-public sealed class DraftReplacementJson
-{
-    [JsonPropertyName("replacement")]
-    public string Replacement { get; set; } = "";
-}

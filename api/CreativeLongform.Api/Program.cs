@@ -24,6 +24,7 @@ builder.Services.AddCors(options =>
     });
 });
 
+builder.Services.AddSingleton<GenerationProgressReplayBuffer>();
 builder.Services.AddSingleton<IGenerationProgressNotifier, SignalRGenerationProgressNotifier>();
 builder.Services.AddHttpClient();
 builder.Services.AddInfrastructure(builder.Configuration);

@@ -12,6 +12,8 @@ internal sealed class NoOpGenerationProgressNotifier : IGenerationProgressNotifi
         CancellationToken cancellationToken = default,
         long? elapsedMsSinceRunStart = null,
         long? stepDurationMs = null,
-        Guid? llmCallId = null)
+        Guid? llmCallId = null,
+        string? workingDocumentText = null,
+        int? documentRevision = null)
         => Task.CompletedTask;
 }

@@ -6,10 +6,34 @@ public sealed class AgentEditRunOptions
     /// <summary>Beginning narrative state JSON for compliance and writer calls.</summary>
     public string StateBeforeJson { get; init; } = "{}";
 
+    /// <summary>Explicit authorized cast block (stateBefore + linked Character elements) for agent context.</summary>
+    public string AuthorizedCastBlock { get; init; } = "";
+
     public AgentLoreCatalog? Lore { get; init; }
+
+    /// <summary>Author correction instruction for Correct With LLM sessions (primary agent goal).</summary>
+    public string? UserCorrectionMission { get; init; }
+
+    /// <summary>UTF-16 selection start when the author highlighted a passage (end exclusive).</summary>
+    public int? SelectionStart { get; init; }
+
+    /// <summary>UTF-16 selection end when the author highlighted a passage (end exclusive).</summary>
+    public int? SelectionEnd { get; init; }
 
     /// <summary>Runs instruction compliance on the supplied full draft text; returns verdict for the agent.</summary>
     public Func<string, CancellationToken, Task<ComplianceVerdict>>? RunComplianceAsync { get; init; }
+
+    /// <summary>Runs prose quality critique on the supplied full draft text; returns verdict for the agent.</summary>
+    public Func<string, CancellationToken, Task<QualityVerdict>>? RunQualityAsync { get; init; }
+
+    /// <summary>Max quality checks per agent session.</summary>
+    public int MaxQualityChecks { get; init; } = 8;
+
+    /// <summary>Minimum quality score required before finish when <see cref="RequireQualityBeforeFinish"/> is true.</summary>
+    public double? QualityReviewMinScore { get; init; }
+
+    /// <summary>When true, finish requires a fresh run_quality_check on the current draft.</summary>
+    public bool RequireQualityBeforeFinish { get; init; }
 
     /// <summary>Asks the prose writer model to rewrite a paragraph span; returns replacement prose only.</summary>
     public Func<AgentWriterInvokeRequest, CancellationToken, Task<string>>? InvokeWriterAsync { get; init; }
@@ -28,6 +52,9 @@ public sealed class AgentEditRunOptions
 
     /// <summary>Always-visible book tone/style/synopsis block.</summary>
     public string BookDirectiveBlock { get; init; } = "";
+
+    /// <summary>When the pipeline already published the initial working document, continue revisions from this number.</summary>
+    public int InitialWorkingDocumentRevision { get; init; }
 
     public AgentSceneContextCatalog? Timeline { get; init; }
 }

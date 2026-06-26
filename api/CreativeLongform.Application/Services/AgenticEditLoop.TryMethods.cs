@@ -43,6 +43,39 @@ public static partial class AgenticEditLoop
             }
         }
 
+        if (state.RunOptions?.RunQualityAsync is not null && state.RunOptions.RequireQualityBeforeFinish)
+        {
+            if (state.LastQualityVerdict is null)
+            {
+                var checksExhausted = state.QualityCheckCount >= state.RunOptions.MaxQualityChecks;
+                if (!(checksExhausted && state.DraftEditedSinceLastQuality))
+                {
+                    var msg = checksExhausted
+                        ? "Error: cannot finish — quality check limit reached and draft was not edited since the last check. Apply fixInstructions, then finish."
+                        : "Error: cannot finish — run_quality_check on the current draft first.";
+                    return Task.FromResult(new AgentToolExecuteResult(AgentToolExecuteStatus.Error, msg));
+                }
+
+                state.Logger.LogWarning("Agent finish with quality checks exhausted; draft was edited but score was not re-verified");
+            }
+            else
+            {
+                var draftNow = JoinParagraphs(state.Paragraphs);
+                if (HashDraft(draftNow) != state.LastQualityDraftHash)
+                {
+                    return Task.FromResult(new AgentToolExecuteResult(AgentToolExecuteStatus.Error,
+                        "Error: cannot finish — draft changed since last quality check. run_quality_check on the current draft first."));
+                }
+
+                var minScore = state.RunOptions.QualityReviewMinScore ?? 55;
+                if (state.LastQualityVerdict.Score < minScore || state.LastQualityVerdict.FixInstructions.Count > 0)
+                {
+                    var msg = FormatQualityMustFixBeforeFinish(state.LastQualityVerdict, minScore);
+                    return Task.FromResult(new AgentToolExecuteResult(AgentToolExecuteStatus.Error, msg));
+                }
+            }
+        }
+
         state.Logger.LogInformation("Agentic edit finished: {Reason}", action.Reason ?? "");
         var finishMsg = $"Editor finished (agent pass). Why: {Truncate(action.Reason ?? "(no reason)", 400)}";
         return Task.FromResult(new AgentToolExecuteResult(AgentToolExecuteStatus.Finished, finishMsg));
@@ -70,10 +103,42 @@ public static partial class AgenticEditLoop
 
         state.ComplianceCheckCount++;
         state.LastComplianceDraftHash = draftHash;
-        var verdict = await state.RunOptions.RunComplianceAsync(draftNow, state.CancellationToken);
+        var raw = await state.RunOptions.RunComplianceAsync(draftNow, state.CancellationToken);
+        var grounded = ComplianceVerdictGrounding.GroundAgainstDraft(draftNow, raw);
+        var verdict = LanguageContextShiftDetector.MergeIntoCompliance(grounded.Verdict,
+            LanguageContextShiftDetector.Analyze(draftNow));
         state.LastComplianceVerdict = verdict;
         state.DraftEditedSinceLastCompliance = false;
-        var msg = FormatComplianceToolResult(verdict);
+        var msg = FormatComplianceToolResult(verdict, grounded.DroppedItems);
+        return new AgentToolExecuteResult(AgentToolExecuteStatus.Ok, msg);
+    }
+
+    internal static async Task<AgentToolExecuteResult> TryQualityCheckAsync(
+        AgentEditLoopState state,
+        int turn,
+        int maxTurns,
+        Stopwatch turnSw,
+        Guid llmCallId)
+    {
+        if (state.RunOptions?.RunQualityAsync is null)
+            return new AgentToolExecuteResult(AgentToolExecuteStatus.Error, "Error: run_quality_check is not available.");
+
+        if (state.QualityCheckCount >= state.RunOptions.MaxQualityChecks)
+            return new AgentToolExecuteResult(AgentToolExecuteStatus.Error,
+                $"Error: quality check limit ({state.RunOptions.MaxQualityChecks}) reached. Apply fixInstructions via edit tools.");
+
+        var draftNow = JoinParagraphs(state.Paragraphs);
+        var draftHash = HashDraft(draftNow);
+        if (draftHash == state.LastQualityDraftHash)
+            return new AgentToolExecuteResult(AgentToolExecuteStatus.Error,
+                "Error: draft unchanged since last quality check. Apply fixes, then run_quality_check again.");
+
+        state.QualityCheckCount++;
+        state.LastQualityDraftHash = draftHash;
+        var verdict = await state.RunOptions.RunQualityAsync(draftNow, state.CancellationToken);
+        state.LastQualityVerdict = verdict;
+        state.DraftEditedSinceLastQuality = false;
+        var msg = FormatQualityToolResult(verdict, state.RunOptions.QualityReviewMinScore ?? 55);
         return new AgentToolExecuteResult(AgentToolExecuteStatus.Ok, msg);
     }
 
@@ -98,7 +163,9 @@ public static partial class AgenticEditLoop
         if (patchResult.ToolResult.StartsWith("Error:", StringComparison.Ordinal))
             return new AgentToolExecuteResult(AgentToolExecuteStatus.Error, patchResult.ToolResult);
         state.MarkEdited();
-        return new AgentToolExecuteResult(AgentToolExecuteStatus.Ok, AppendPostEditGuidance(patchResult.ToolResult));
+        if (action.ParagraphStart is { } patchStart && action.ParagraphEnd is { } patchEnd)
+            await WorkingDocumentNotifier.NotifyAgentStateAsync(state, $"propose_patch updated ¶{patchStart}..{patchEnd}");
+        return new AgentToolExecuteResult(AgentToolExecuteStatus.Ok, AppendPostEditGuidance(state, patchResult.ToolResult));
     }
 
     internal static async Task<AgentToolExecuteResult> TryInvokeWriterAsync(
@@ -188,13 +255,14 @@ public static partial class AgenticEditLoop
         await AgentEditProgress.NotifyStatusAsync(state,
             AgentEditNarrative.DescribeApplyingReplace(originalSpan, replacement, ws, we), llmCallId);
 
-        action.Replacement = replacement;
+        action.Replacement = LlmProseSanitizer.ProseForApplication(replacement);
         var patch = await TryApplyParagraphReplacementAsync(
             state.Paragraphs, state.ReadRanges, state.AppliedEditKeys, action, state.Logger, source,
             preapprovedEditKey: key);
         if (patch.ToolResult.StartsWith("Error:", StringComparison.Ordinal))
             return new AgentToolExecuteResult(AgentToolExecuteStatus.Error, patch.ToolResult);
         state.MarkEdited();
-        return new AgentToolExecuteResult(AgentToolExecuteStatus.Ok, AppendPostEditGuidance(patch.ToolResult));
+        await WorkingDocumentNotifier.NotifyAgentStateAsync(state, $"{role} updated ¶{ws}..{we}");
+        return new AgentToolExecuteResult(AgentToolExecuteStatus.Ok, AppendPostEditGuidance(state, patch.ToolResult));
     }
 }
