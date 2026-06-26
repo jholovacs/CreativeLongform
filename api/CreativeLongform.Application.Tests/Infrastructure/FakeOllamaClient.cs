@@ -1,4 +1,5 @@
 using CreativeLongform.Application.Abstractions;
+using CreativeLongform.Application.Ollama;
 
 namespace CreativeLongform.Application.Tests.Infrastructure;
 
@@ -35,6 +36,7 @@ public sealed class FakeOllamaClient : IOllamaClient
         IReadOnlyList<OllamaChatMessage> messages,
         bool jsonFormat,
         OllamaChatOptions? options = null,
+        Func<OllamaStreamUpdate, CancellationToken, Task>? onStreamUpdate = null,
         CancellationToken cancellationToken = default)
     {
         if (_pauseGate is not null)
@@ -45,6 +47,8 @@ public sealed class FakeOllamaClient : IOllamaClient
             throw new InvalidOperationException("FakeOllamaClient: no response queued.");
 
         var text = _messageTexts.Dequeue();
+        if (onStreamUpdate is not null)
+            await onStreamUpdate(new OllamaStreamUpdate(text, text, true), cancellationToken);
         return new OllamaChatResult(model, text);
     }
 

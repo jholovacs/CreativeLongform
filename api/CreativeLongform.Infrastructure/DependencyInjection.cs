@@ -30,7 +30,7 @@ public static class DependencyInjection
         services.AddHttpClient<IOllamaAdminApi, OllamaAdminApi>(client =>
             client.Timeout = TimeSpan.FromMinutes(60));
         services.AddHttpClient<IOllamaClient, OllamaClient>(client =>
-            client.Timeout = TimeSpan.FromMinutes(15));
+            client.Timeout = Timeout.InfiniteTimeSpan);
 
         services.AddSingleton<IGenerationRunCancellationRegistry, GenerationRunCancellationRegistry>();
         services.AddScoped<IGenerationOrchestrator, GenerationOrchestrator>();

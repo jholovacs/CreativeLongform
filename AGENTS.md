@@ -59,6 +59,7 @@ Paragraph indices are **0-based**, inclusive ranges, on the **current** draft (d
 3. **`finish` auto-runs** final compliance/quality checks on the current draft if stale — no escape hatch without a passing check.
 4. **Delegated edits** return `edit_diff` + `delegation_verification` for the orchestrator to review.
 5. **Word budget** — When the draft is below `MinWordsTarget`, use `check_word_budget` then `break_up_scene` (after `read_section` on the full draft). Beats use `expand` (rewrite ¶ range) or `insert_after` (new ¶ after anchor); each beat delegates to the Writer with a per-beat `targetWords`. Cap: `MaxSceneBreakUps` (default 3) per session, up to 8 beats per call.
+6. **Delegation vs micro-edit** — `propose_patch` is capped (~45 words). Substantive rewrites must use `invoke_writer` / `invoke_editor` / `invoke_corrector` (separate models; SignalR step `Writer`/`Editor`/`Corrector`). The orchestrator must not paste long replacement prose into `propose_patch`.
 
 ---
 

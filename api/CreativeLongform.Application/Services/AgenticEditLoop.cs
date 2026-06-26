@@ -62,7 +62,7 @@ public static partial class AgenticEditLoop
         - { "action": "invoke_writer", "paragraphStart": <int>, "paragraphEnd": <int>, "instruction": "<brief>", "focusExcerpt": "<optional>", "contextParagraphsBefore": <int default 2>, "contextParagraphsAfter": <int default 2>, "complianceNotes": "<optional>", "reason": "<why>" } — creative rewrite; default 2 ¶ context each side unless you set 0.
         - { "action": "invoke_editor", ... same optional scope fields ... } — light touch-ups (tense, perspective, formatting).
         - { "action": "invoke_corrector", ... same optional scope fields ... } — grammar/punctuation.
-        - { "action": "propose_patch", "paragraphStart": <int>, "paragraphEnd": <int>, "replacement": "<prose>", "reason": "<why>" } — apply your own replacement directly.
+        - { "action": "propose_patch", "paragraphStart": <int>, "paragraphEnd": <int>, "replacement": "<prose>", "reason": "<why>" } — micro-edits ONLY (≤45 words). Never paste substantive rewrites here.
         - { "action": "run_script", "steps": [ { ...tool json... }, ... ], "reason": "<why>" } — batch up to 12 surgical steps (find → patch → replace, multiple localized fixes). Stops on first error. No nested run_script or finish inside scripts.
         - { "action": "finish", "reason": "<short reason>" } — stop ONLY after required checks pass on the CURRENT draft (see finish rules below).
 
@@ -97,7 +97,7 @@ public static partial class AgenticEditLoop
 
         Model selection:
         - find_text + replace_text / swap_text / patch_text — mechanical fixes without an LLM.
-        - propose_patch — one word or short phrase you apply directly.
+        - propose_patch — micro-edits only (≤45 words). Substantive rewrites MUST use invoke_writer / invoke_editor / invoke_corrector.
         - invoke_corrector — grammar/spelling/punctuation.
         - invoke_editor — tense, POV, formatting.
         - invoke_writer — creative rewrite or voice overhaul.
@@ -509,6 +509,17 @@ public static partial class AgenticEditLoop
             INDEXING NOTE: The draft is ONE paragraph [0] (no blank lines between blocks). Replacing [0,0] replaces the ENTIRE scene.
             If you only mean to edit part of the text, you still must replace [0,0] but your replacement must include ALL original plot and events—never a shortened version.
             """;
+    }
+
+    internal static void EnsureReadCoversForEdit(IList<(int start, int end)> readRanges, int patchStart, int patchEnd)
+    {
+        foreach (var (rs, re) in readRanges)
+        {
+            if (rs <= patchStart && re >= patchEnd)
+                return;
+        }
+
+        readRanges.Add((patchStart, patchEnd));
     }
 
     private static bool IsRangeCoveredByReads(int patchStart, int patchEnd, IReadOnlyList<(int start, int end)> reads)

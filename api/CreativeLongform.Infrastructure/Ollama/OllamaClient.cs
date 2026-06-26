@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using CreativeLongform.Application.Abstractions;
 using CreativeLongform.Application.Ollama;
@@ -36,31 +37,12 @@ public sealed class OllamaClient : IOllamaClient
         IReadOnlyList<OllamaChatMessage> messages,
         bool jsonFormat,
         OllamaChatOptions? options = null,
+        Func<OllamaStreamUpdate, CancellationToken, Task>? onStreamUpdate = null,
         CancellationToken cancellationToken = default)
     {
         var apiRoot = await _baseUrl.GetEffectiveBaseUrlAsync(cancellationToken);
-        var payload = new Dictionary<string, object?>
-        {
-            ["model"] = model,
-            ["messages"] = messages.Select(m => new { role = m.Role, content = m.Content }).ToList(),
-            ["stream"] = false
-        };
-        if (jsonFormat)
-            payload["format"] = "json";
-        if (options is not null)
-        {
-            var ollamaOpts = new Dictionary<string, object?>();
-            if (options.NumPredict is { } n)
-                ollamaOpts["num_predict"] = n;
-            if (options.RepeatPenalty is { } rp)
-                ollamaOpts["repeat_penalty"] = rp;
-            if (options.RepeatLastN is { } rln)
-                ollamaOpts["repeat_last_n"] = rln;
-            if (options.Temperature is { } temp)
-                ollamaOpts["temperature"] = temp;
-            if (ollamaOpts.Count > 0)
-                payload["options"] = ollamaOpts;
-        }
+        var stream = onStreamUpdate is not null;
+        var payload = BuildPayload(model, messages, jsonFormat, options, stream);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, OllamaBaseUrlHelper.ApiEndpoint(apiRoot, "chat"))
         {
@@ -84,11 +66,101 @@ public sealed class OllamaClient : IOllamaClient
                 $"Ollama chat failed ({apiRoot}): {(int)response.StatusCode} {response.ReasonPhrase}. {Truncate(errBody, 500)}");
         }
 
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
-        var root = doc.RootElement;
-        var content = root.GetProperty("message").GetProperty("content").GetString() ?? string.Empty;
+        await using var body = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var content = stream
+            ? await ReadStreamingChatAsync(body, onStreamUpdate!, cancellationToken)
+            : await ReadBufferedChatAsync(body, cancellationToken);
         return new OllamaChatResult(model, content);
+    }
+
+    private static Dictionary<string, object?> BuildPayload(
+        string model,
+        IReadOnlyList<OllamaChatMessage> messages,
+        bool jsonFormat,
+        OllamaChatOptions? options,
+        bool stream)
+    {
+        var payload = new Dictionary<string, object?>
+        {
+            ["model"] = model,
+            ["messages"] = messages.Select(m => new { role = m.Role, content = m.Content }).ToList(),
+            ["stream"] = stream
+        };
+        if (jsonFormat)
+            payload["format"] = "json";
+        if (options is not null)
+        {
+            var ollamaOpts = new Dictionary<string, object?>();
+            if (options.NumPredict is { } n)
+                ollamaOpts["num_predict"] = n;
+            if (options.RepeatPenalty is { } rp)
+                ollamaOpts["repeat_penalty"] = rp;
+            if (options.RepeatLastN is { } rln)
+                ollamaOpts["repeat_last_n"] = rln;
+            if (options.Temperature is { } temp)
+                ollamaOpts["temperature"] = temp;
+            if (ollamaOpts.Count > 0)
+                payload["options"] = ollamaOpts;
+        }
+
+        return payload;
+    }
+
+    private static async Task<string> ReadBufferedChatAsync(Stream body, CancellationToken cancellationToken)
+    {
+        using var doc = await JsonDocument.ParseAsync(body, cancellationToken: cancellationToken);
+        return doc.RootElement.GetProperty("message").GetProperty("content").GetString() ?? string.Empty;
+    }
+
+    private static async Task<string> ReadStreamingChatAsync(
+        Stream body,
+        Func<OllamaStreamUpdate, CancellationToken, Task> onStreamUpdate,
+        CancellationToken cancellationToken)
+    {
+        using var reader = new StreamReader(body, Encoding.UTF8);
+        var content = new StringBuilder();
+        while (true)
+        {
+            var line = await reader.ReadLineAsync(cancellationToken);
+            if (line is null)
+                break;
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            var delta = ExtractStreamDelta(root);
+            if (!string.IsNullOrEmpty(delta))
+            {
+                content.Append(delta);
+                await onStreamUpdate(new OllamaStreamUpdate(delta, content.ToString(), false), cancellationToken);
+            }
+
+            if (root.TryGetProperty("done", out var doneEl) && doneEl.ValueKind == JsonValueKind.True)
+            {
+                await onStreamUpdate(new OllamaStreamUpdate("", content.ToString(), true), cancellationToken);
+                break;
+            }
+        }
+
+        return content.ToString();
+    }
+
+    private static string? ExtractStreamDelta(JsonElement root)
+    {
+        if (!root.TryGetProperty("message", out var message))
+            return null;
+        if (message.TryGetProperty("content", out var contentEl))
+        {
+            var text = contentEl.GetString();
+            if (!string.IsNullOrEmpty(text))
+                return text;
+        }
+
+        if (message.TryGetProperty("thinking", out var thinkingEl))
+            return thinkingEl.GetString();
+
+        return null;
     }
 
     private static string Truncate(string s, int max)

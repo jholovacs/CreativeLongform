@@ -185,9 +185,7 @@ public static partial class AgenticEditLoop
     {
         if (action.ParagraphStart is { } ps && action.ParagraphEnd is { } pe)
         {
-            var readErr = RequireReadRangeError(state.ReadRanges, ps, pe, source);
-            if (readErr is not null)
-                return new AgentToolExecuteResult(AgentToolExecuteStatus.Error, readErr);
+            EnsureReadCoversForEdit(state.ReadRanges, ps, pe);
 
             var originalSpan = JoinParagraphs(state.Paragraphs.Skip(ps).Take(pe - ps + 1).ToList());
             await AgentEditProgress.NotifyStatusAsync(state,
@@ -255,9 +253,7 @@ public static partial class AgenticEditLoop
         if (string.IsNullOrEmpty(instruction))
             return new AgentToolExecuteResult(AgentToolExecuteStatus.Error, $"Error: {source} requires non-empty \"instruction\".");
 
-        var readErr = RequireReadRangeError(state.ReadRanges, ws, we, source);
-        if (readErr is not null)
-            return new AgentToolExecuteResult(AgentToolExecuteStatus.Error, readErr);
+        EnsureReadCoversForEdit(state.ReadRanges, ws, we);
 
         var key = EditKey(kind, ws, we, instruction);
         if (state.AppliedEditKeys.Contains(key))
@@ -270,6 +266,9 @@ public static partial class AgenticEditLoop
 
         var role = AgentEditNarrative.RoleDisplayName(kind);
         var originalSpan = JoinParagraphs(state.Paragraphs.Skip(ws).Take(we - ws + 1).ToList());
+
+        await AgentEditProgress.NotifyStatusAsync(state,
+            $"Calling {role} model for ¶{ws}..{we}…", llmCallId);
 
         string replacement;
         try

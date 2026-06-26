@@ -1,10 +1,19 @@
 import { CommonModule } from '@angular/common';
-import { ChangeDetectorRef, Component, NgZone, OnDestroy, OnInit, inject } from '@angular/core';
+import { ChangeDetectorRef, Component, ElementRef, NgZone, OnDestroy, OnInit, ViewChild, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { HubConnection } from '@microsoft/signalr';
 import { forkJoin, Subject, Subscription } from 'rxjs';
 import { concatMap, debounceTime, distinctUntilChanged, takeUntil } from 'rxjs/operators';
+import {
+  formatEventBadgeLabel,
+  generationLogTitle,
+  GenerationLogKind,
+  generationNowLabelForEvent,
+  mapEventToKind,
+  nextGenerationLogId,
+  resolveGenerationNowLabelAfterHubConnect
+} from '../core/generation-progress-log';
 import { formatJsonPretty, isEmptyStateJson, jsonFieldToText } from '../core/json-format';
 import {
   GENERATION_RUN_STATUS,
@@ -31,9 +40,6 @@ type SceneWorkflowPanelKey =
   | 'beginningState'
   | 'worldElements'
   | 'generate';
-
-/** Log line category for the in-app generation activity log. */
-export type GenerationLogKind = 'phase' | 'llm' | 'agent' | 'repair' | 'run' | 'other';
 
 /** One row in the scene workflow generation log (derived from SignalR + optional OData fetches). */
 export interface GenerationLogEntry {
@@ -142,6 +148,11 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   workingDocumentChangedParagraphIndices = new Set<number>();
   /** Sticky label in the progress modal while the pipeline is in flight. */
   generationNowLabel: string | null = null;
+  /** Tokens streaming from the current Ollama call (batched via SignalR). */
+  llmLiveStreamText = '';
+  llmLiveStreamStep: string | null = null;
+  private llmLiveStreamCallId: string | null = null;
+  @ViewChild('llmStreamScroll') llmStreamScroll?: ElementRef<HTMLElement>;
   error: string | null = null;
   busy = false;
   generationRunId: string | null = null;
@@ -166,6 +177,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   private hub: HubConnection | null = null;
   /** Bumped on hub teardown so stale async connect handlers are ignored. */
   private generationHubSession = 0;
+  private generationStatusPoll: ReturnType<typeof setInterval> | undefined;
   /** Prevents double-handling RunFinished (SignalR + OData sync). */
   private finishedGenerationRunId: string | null = null;
 
@@ -1050,103 +1062,25 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   }
 
   /** SignalR / server event names (PascalCase) → spaced words for the log badge. */
-  formatEventBadgeLabel(name: string): string {
-    if (!name) return '';
-    return name
-      .replace(/_/g, ' ')
-      .replace(/([a-z\d])([A-Z])/g, '$1 $2')
-      .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
-      .trim();
-  }
-
-  private nextLogId(): string {
-    return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-  }
-
-  /** Human-readable title for a generation log row. */
-  private generationLogTitle(eventName: string, p: GenerationProgressPayload, stepLabel: string): string {
-    const detail = (p.detail ?? '').trim();
-    const narrative = this.extractAgentNarrativeHeadline(detail);
-    if (narrative) {
-      return narrative;
-    }
-
-    const agentTool = (p.step ?? '').replace(/_/g, ' ').trim();
-    switch (eventName) {
-      case 'LlmRoundtrip':
-      case 'LlmStarted':
-        if (p.step === 'AgentEdit') {
-          const agentLine = this.extractAgentNarrativeHeadline(detail);
-          if (agentLine) {
-            return agentLine;
-          }
-        }
-        return stepLabel.includes('is reworking') ? stepLabel : `LLM · ${stepLabel}`;
-      case 'RunStarted':
-        return 'Pipeline started';
-      case 'AgentEditStatus':
-        return detail.split('\n')[0]?.trim() || 'Agent';
-      case 'WorkingDocumentUpdated':
-        return (p.step ?? '').trim() || 'Working document updated';
-      case 'AgentEditAction':
-        return agentTool ? `Agent → ${agentTool}` : 'Agent action';
-      case 'AgentEditResult':
-        return agentTool ? `Agent ← ${agentTool}` : 'Agent result';
-      case 'AgentEditTurn':
-        return 'Agent edit';
-      case 'RepairDraftApplied':
-        return 'Repair — draft updated';
-      case 'DraftReviewNote':
-        return 'Compliance / quality note';
-      case 'Local':
-        return 'Status';
-      default:
-        return stepLabel;
-    }
-  }
-
-  /** First line of agent detail when it reads like a narrative status (not raw JSON/tool dump). */
-  private extractAgentNarrativeHeadline(detail: string): string | null {
-    if (!detail) {
-      return null;
-    }
-    const line = detail.split('\n').find((l) => l.trim().length > 0)?.trim() ?? '';
-    if (!line || line.startsWith('Action JSON') || line.startsWith('Tool response') || line.startsWith('Turn ')) {
-      return null;
-    }
-    if (line.startsWith('Agent concluded:') || line.startsWith('Next step:')) {
-      return line;
-    }
-    if (/^(Agent|Writer|Editor|Corrector|That step|Replaced|Replace |Compliance|Search |Script |Writer rewrite|Editor touch|Corrector fixes)/i.test(line)) {
-      return line;
-    }
-    if (/^Agent concluded:/i.test(line) || /^Next step:/i.test(line)) {
-      return line;
-    }
-    const delegationWait = line.match(/^(Writer|Editor|Corrector) is reworking .+?(?=:|$)/);
-    if (delegationWait) {
-      return delegationWait[0].replace(/:$/, '').trim();
-    }
-    return null;
-  }
+  formatEventBadgeLabel = formatEventBadgeLabel;
 
   private pushProgressEvent(eventName: string, p: GenerationProgressPayload): void {
     if (eventName === 'WorkingDocumentUpdated') {
       this.applyWorkingDocumentUpdate(p);
       return;
     }
-
-    this.updateGenerationNow(eventName, p);
-    if (eventName === 'LlmStarted' && p.step !== 'AgentEdit') {
-      this.cdr.markForCheck();
+    if (eventName === 'LlmStreamChunk') {
+      this.appendLlmStreamChunk(p);
       return;
     }
-    const kind = this.mapEventToKind(eventName);
+
+    this.updateGenerationNow(eventName, p);
+    const kind = mapEventToKind(eventName);
     const stepLabel = (p.step ?? '').replace(/_/g, ' ').trim() || eventName;
-    const title = this.generationLogTitle(eventName, p, stepLabel);
+    const title = generationLogTitle(eventName, p, stepLabel);
     const detail = (p.detail ?? '').trim();
     const entry: GenerationLogEntry = {
-      id: this.nextLogId(),
+      id: nextGenerationLogId(),
       at: new Date(),
       kind,
       eventName,
@@ -1184,7 +1118,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
 
     const summary = this.workingDocumentChangeSummary;
     const entry: GenerationLogEntry = {
-      id: this.nextLogId(),
+      id: nextGenerationLogId(),
       at: new Date(),
       kind: 'phase',
       eventName: 'WorkingDocumentUpdated',
@@ -1199,70 +1133,62 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.cdr.markForCheck();
   }
 
+  private appendLlmStreamChunk(p: GenerationProgressPayload): void {
+    const delta = p.detail ?? '';
+    if (!delta) {
+      return;
+    }
+    if (p.llmCallId && p.llmCallId !== this.llmLiveStreamCallId) {
+      this.llmLiveStreamText = '';
+      this.llmLiveStreamCallId = p.llmCallId;
+    }
+    this.llmLiveStreamText += delta;
+    if (this.llmLiveStreamText.length > 50_000) {
+      this.llmLiveStreamText = `…\n${this.llmLiveStreamText.slice(-48_000)}`;
+    }
+    this.llmLiveStreamStep = (p.step ?? '').trim() || this.llmLiveStreamStep;
+    const stepLabel = this.llmLiveStreamStep ?? 'Model';
+    this.generationNowLabel = `${stepLabel} streaming (${this.llmLiveStreamText.length.toLocaleString()} chars)…`;
+    this.cdr.markForCheck();
+    setTimeout(() => {
+      const el = this.llmStreamScroll?.nativeElement;
+      if (el) {
+        el.scrollTop = el.scrollHeight;
+      }
+    }, 0);
+  }
+
+  private resetLlmLiveStream(): void {
+    this.llmLiveStreamText = '';
+    this.llmLiveStreamStep = null;
+    this.llmLiveStreamCallId = null;
+  }
+
   /** Live “what is happening now” line (LLM waits can be minutes; log rows only show completed steps). */
   private updateGenerationNow(eventName: string, p: GenerationProgressPayload): void {
     if (eventName === 'RunFinished') {
       this.generationNowLabel = null;
       return;
     }
-    const detail = (p.detail ?? '').trim();
-    switch (eventName) {
-      case 'LlmStarted':
-        this.generationNowLabel = this.extractAgentNarrativeHeadline(detail) ?? (detail || `Waiting on model (${p.step ?? 'LLM'})…`);
-        break;
-      case 'LlmRoundtrip':
-        this.generationNowLabel = this.extractAgentNarrativeHeadline(detail) ?? 'Processing model response…';
-        break;
-      case 'StepStarted':
-      case 'RunStarted':
-      case 'AgentEditTurn':
-      case 'AgentEditAction':
-      case 'AgentEditResult':
-      case 'AgentEditStatus':
-        this.generationNowLabel = this.extractAgentNarrativeHeadline(detail) ?? (detail || (p.step ?? 'Working…'));
-        break;
-      case 'WorkingDocumentUpdated':
-        this.generationNowLabel = (p.step ?? '').trim() || 'Working document updated';
-        break;
-      case 'Local':
-        if (detail) {
-          this.generationNowLabel = detail;
-        }
-        break;
-      default:
-        if (detail) {
-          this.generationNowLabel = this.extractAgentNarrativeHeadline(detail) ?? detail;
-        }
-        break;
+    if (eventName === 'LlmStarted') {
+      this.resetLlmLiveStream();
+      this.llmLiveStreamCallId = p.llmCallId ?? null;
+      this.llmLiveStreamStep = (p.step ?? '').trim() || null;
+    }
+    const next = generationNowLabelForEvent(eventName, p);
+    if (next !== null) {
+      this.generationNowLabel = next;
     }
     this.cdr.markForCheck();
   }
 
-  private mapEventToKind(eventName: string): GenerationLogKind {
-    switch (eventName) {
-      case 'LlmRoundtrip':
-        return 'llm';
-      case 'AgentEditTurn':
-      case 'AgentEditAction':
-      case 'AgentEditResult':
-      case 'AgentEditStatus':
-        return 'agent';
-      case 'RepairAttempt':
-      case 'RepairDraftApplied':
-        return 'repair';
-      case 'DraftReviewNote':
-        return 'phase';
-      case 'RunStarted':
-      case 'RunFinished':
-        return 'run';
-      case 'StepStarted':
-        return 'phase';
-      case 'WorkingDocumentUpdated':
-        return 'phase';
-      case 'Local':
-        return 'other';
-      default:
-        return 'other';
+  private refreshGenerationNowLabelFromLog(): void {
+    const resolved = resolveGenerationNowLabelAfterHubConnect(
+      this.generationLogEntries,
+      this.generationNowLabel
+    );
+    if (resolved) {
+      this.generationNowLabel = resolved;
     }
   }
 
@@ -1437,6 +1363,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.workingDocumentChangeSummary = null;
     this.workingDocumentParagraphs = [];
     this.workingDocumentChangedParagraphIndices = new Set();
+    this.resetLlmLiveStream();
     this.generationNowLabel = 'Saving scene and starting generation…';
     this.generationLogModalOpen = true;
     this.pushProgressEvent('Local', {
@@ -1534,9 +1461,12 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
             stepDurationMs: null,
             llmCallId: null
           });
+          this.refreshGenerationNowLabelFromLog();
           if (this.busy && !this.generationNowLabel) {
             this.generationNowLabel = 'Pipeline connected — waiting for progress…';
           }
+          this.cdr.markForCheck();
+          this.startGenerationStatusPoll(runId, session);
           this.syncGenerationRunStateIfTerminal(runId, session);
         });
       })
@@ -1556,6 +1486,30 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
         });
         this.generationNowLabel = null;
       });
+  }
+
+  /** If RunFinished was emitted before JoinRun (e.g. fast cancel), reconcile from OData. */
+  private startGenerationStatusPoll(runId: string, session: number): void {
+    this.stopGenerationStatusPoll();
+    this.generationStatusPoll = setInterval(() => {
+      if (session !== this.generationHubSession || !this.busy) {
+        this.stopGenerationStatusPoll();
+        return;
+      }
+      this.zone.run(() => {
+        this.syncGenerationRunStateIfTerminal(runId, session);
+        if (!this.llmLiveStreamText) {
+          this.refreshGenerationNowLabelFromLog();
+        }
+      });
+    }, 20_000);
+  }
+
+  private stopGenerationStatusPoll(): void {
+    if (this.generationStatusPoll !== undefined) {
+      clearInterval(this.generationStatusPoll);
+      this.generationStatusPoll = undefined;
+    }
   }
 
   /** If RunFinished was emitted before JoinRun (e.g. fast cancel), reconcile from OData. */
@@ -1594,6 +1548,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   }
 
   private async teardownGenerationHub(): Promise<void> {
+    this.stopGenerationStatusPoll();
     this.generationHubSession += 1;
     const hub = this.hub;
     this.hub = null;
@@ -1611,6 +1566,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     this.pushProgressEvent('RunFinished', p);
     this.busy = false;
     this.generationNowLabel = null;
+    this.resetLlmLiveStream();
     void this.teardownGenerationHub();
     const step = p.step;
     if (step === 'Cancelled') {

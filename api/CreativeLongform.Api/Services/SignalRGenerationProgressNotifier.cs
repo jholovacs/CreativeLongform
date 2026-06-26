@@ -38,7 +38,8 @@ public sealed class SignalRGenerationProgressNotifier : IGenerationProgressNotif
             workingDocumentText,
             documentRevision
         };
-        _replay.Record(generationRunId, eventName, payload);
+        if (!string.Equals(eventName, "LlmStreamChunk", StringComparison.Ordinal))
+            _replay.Record(generationRunId, eventName, payload);
         if (string.Equals(eventName, "RunFinished", StringComparison.Ordinal))
             _replay.RemoveRun(generationRunId);
 

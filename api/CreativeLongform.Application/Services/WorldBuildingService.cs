@@ -105,7 +105,7 @@ public sealed class WorldBuildingService : IWorldBuildingService
             new("user", user)
         };
         var req = JsonSerializer.Serialize(new { model, messages, format = "json" });
-        var result = await _ollama.ChatAsync(model, messages, jsonFormat: true, options: null, cancellationToken);
+        var result = await _ollama.ChatAsync(model, messages, jsonFormat: true, options: null, cancellationToken: cancellationToken);
         await _db.LlmCalls.AddAsync(new LlmCall
         {
             Id = Guid.NewGuid(),
@@ -212,7 +212,7 @@ public sealed class WorldBuildingService : IWorldBuildingService
             new("user", sb.ToString())
         };
         var req = JsonSerializer.Serialize(new { model, messages, format = "json" });
-        var result = await _ollama.ChatAsync(model, messages, jsonFormat: true, options: null, cancellationToken);
+        var result = await _ollama.ChatAsync(model, messages, jsonFormat: true, options: null, cancellationToken: cancellationToken);
         await _db.LlmCalls.AddAsync(new LlmCall
         {
             Id = Guid.NewGuid(),
@@ -452,7 +452,7 @@ public sealed class WorldBuildingService : IWorldBuildingService
                 new("user", pass.UserContent)
             };
             var req = JsonSerializer.Serialize(new { model, messages, format = "json" });
-            var result = await _ollama.ChatAsync(model, messages, jsonFormat: true, options: null, cancellationToken);
+            var result = await _ollama.ChatAsync(model, messages, jsonFormat: true, options: null, cancellationToken: cancellationToken);
             await _db.LlmCalls.AddAsync(new LlmCall
             {
                 Id = Guid.NewGuid(),
@@ -949,7 +949,7 @@ public sealed class WorldBuildingService : IWorldBuildingService
             user.AppendLine($"- {e.Id} | {e.Kind} | {e.Title} | {Truncate(e.Summary, 200)}");
 
         var messages = new List<OllamaChatMessage> { new("system", system), new("user", user.ToString()) };
-        var result = await _ollama.ChatAsync(model, messages, jsonFormat: true, options: null, cancellationToken);
+        var result = await _ollama.ChatAsync(model, messages, jsonFormat: true, options: null, cancellationToken: cancellationToken);
         await _db.LlmCalls.AddAsync(new LlmCall
         {
             Id = Guid.NewGuid(),
@@ -1216,7 +1216,7 @@ public sealed class WorldBuildingService : IWorldBuildingService
                 new("user", user.ToString())
             };
             var req = JsonSerializer.Serialize(new { model, messages, format = "json" });
-            var result = await _ollama.ChatAsync(model, messages, jsonFormat: true, options: null, cancellationToken);
+            var result = await _ollama.ChatAsync(model, messages, jsonFormat: true, options: null, cancellationToken: cancellationToken);
             await _db.LlmCalls.AddAsync(new LlmCall
             {
                 Id = Guid.NewGuid(),

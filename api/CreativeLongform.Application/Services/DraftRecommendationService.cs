@@ -126,7 +126,7 @@ public sealed class DraftRecommendationService : IDraftRecommendationService
         };
         var reqJson = JsonSerializer.Serialize(new { model, messages, format = "json", num_predict = options.NumPredict });
 
-        var result = await _ollama.ChatAsync(model, messages, jsonFormat: true, options, cancellationToken);
+        var result = await _ollama.ChatAsync(model, messages, jsonFormat: true, options, cancellationToken: cancellationToken);
 
         await _db.LlmCalls.AddAsync(new LlmCall
         {

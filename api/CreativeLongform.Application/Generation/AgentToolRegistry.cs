@@ -1,5 +1,7 @@
 namespace CreativeLongform.Application.Generation;
 
+using CreativeLongform.Application.Agent;
+
 /// <summary>Tool names, usage hints, and failure-budget messaging for the agent edit loop.</summary>
 public static class AgentToolRegistry
 {
@@ -86,7 +88,7 @@ public static class AgentToolRegistry
             case "propose_patch":
                 if (dto.ParagraphStart is null || dto.ParagraphEnd is null || string.IsNullOrWhiteSpace(dto.Replacement))
                     return "Error: propose_patch requires paragraphStart, paragraphEnd, and replacement prose.";
-                break;
+                return AgentProposePatchGuard.Validate(dto);
             case "run_script":
                 if (dto.Steps is null || dto.Steps.Count == 0)
                     return "Error: run_script requires \"steps\": [ array of tool JSON objects ]. Max 12 steps; stops on first error.";

@@ -1,3 +1,5 @@
+using CreativeLongform.Application.Ollama;
+
 namespace CreativeLongform.Application.Abstractions;
 
 public interface IOllamaClient
@@ -7,6 +9,7 @@ public interface IOllamaClient
         IReadOnlyList<OllamaChatMessage> messages,
         bool jsonFormat,
         OllamaChatOptions? options = null,
+        Func<OllamaStreamUpdate, CancellationToken, Task>? onStreamUpdate = null,
         CancellationToken cancellationToken = default);
 
     Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default);

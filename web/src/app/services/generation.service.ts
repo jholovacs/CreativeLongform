@@ -186,6 +186,7 @@ export class GenerationService {
     connection.on('WorkingDocumentUpdated', (payload: GenerationProgressPayload) =>
       emit('WorkingDocumentUpdated', payload));
     connection.on('LlmStarted', (payload: GenerationProgressPayload) => emit('LlmStarted', payload));
+    connection.on('LlmStreamChunk', (payload: GenerationProgressPayload) => emit('LlmStreamChunk', payload));
     connection.on('LlmRoundtrip', (payload: GenerationProgressPayload) => emit('LlmRoundtrip', payload));
     connection.on('RunFinished', (payload: GenerationProgressPayload) => handlers.onFinished?.(payload));
 

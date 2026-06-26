@@ -477,6 +477,46 @@ public class AgenticEditLoopTests
         Assert.True(AgentWordBudget.CountWords(result) > AgentWordBudget.CountWords("Thin opening.\n\nThin middle."));
     }
 
+    [Fact]
+    public async Task RunAsync_invoke_writer_delegates_without_read_on_target_range()
+    {
+        var writerCalled = false;
+        var calls = 0;
+        await AgenticEditLoop.RunAsync(
+            "First paragraph.\n\nSecond paragraph.",
+            "instr",
+            null,
+            "",
+            maxTurns: 3,
+            NullLogger.Instance,
+            (_, _, _) =>
+            {
+                calls++;
+                return Task.FromResult(calls switch
+                {
+                    1 => ("""{"action":"read_section","paragraphStart":0,"paragraphEnd":0}""", "", Guid.Empty),
+                    2 => ("""{"action":"invoke_writer","paragraphStart":1,"paragraphEnd":1,"instruction":"Deepen second beat with dialogue."}""", "", Guid.Empty),
+                    _ => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty)
+                });
+            },
+            new NoopNotifier(),
+            Guid.NewGuid(),
+            () => 0L,
+            CancellationToken.None,
+            new AgentEditRunOptions
+            {
+                InvokeWriterAsync = (req, _) =>
+                {
+                    writerCalled = true;
+                    Assert.Equal(1, req.ParagraphStart);
+                    return Task.FromResult("Expanded second paragraph with new dialogue.");
+                },
+                RunComplianceAsync = (_, _) => Task.FromResult(new ComplianceVerdict { Pass = true })
+            });
+
+        Assert.True(writerCalled);
+    }
+
     private sealed class NoopNotifier : IGenerationProgressNotifier
     {
         public Task NotifyAsync(Guid generationRunId, string eventName, string? step, string? detail,

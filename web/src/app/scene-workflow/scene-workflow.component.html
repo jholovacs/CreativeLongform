@@ -828,11 +828,27 @@
         </button>
       </div>
       <p class="hint">
-        Live updates from the server: pipeline phases, each LLM call, agent actions, and the
+        Live updates from the server: pipeline phases, each LLM call (with streaming output below), agent actions, and the
         <strong>working document</strong> (one draft that updates in place as edits apply). Changed paragraphs flash briefly
         after each revision. Model reasoning in <code>&lt;thinking&gt;</code> tags is stripped before text is applied.
       </p>
       <div class="gen-log-body">
+        <section class="gen-llm-stream" aria-label="Live model output">
+          <div class="gen-llm-stream-header">
+            <h3>Live model output</h3>
+            @if (llmLiveStreamStep) {
+              <span class="gen-working-doc-meta">{{ llmLiveStreamStep }}</span>
+            }
+            @if (llmLiveStreamText) {
+              <span class="gen-working-doc-meta">{{ llmLiveStreamText.length | number }} chars</span>
+            }
+          </div>
+          @if (llmLiveStreamText) {
+            <pre class="gen-llm-stream-scroll" #llmStreamScroll>{{ llmLiveStreamText }}</pre>
+          } @else {
+            <p class="hint gen-llm-stream-empty">Tokens from Ollama appear here while each model call is running…</p>
+          }
+        </section>
         <section class="gen-working-doc" aria-label="Working document">
           <div class="gen-working-doc-header">
             <h3>Working document</h3>

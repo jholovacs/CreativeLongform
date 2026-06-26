@@ -7,6 +7,7 @@ using CreativeLongform.Application.Abstractions;
 using CreativeLongform.Application.Agent;
 using CreativeLongform.Application.Generation;
 using CreativeLongform.Application.Narrative;
+using CreativeLongform.Application.Ollama;
 using CreativeLongform.Application.Options;
 using CreativeLongform.Application.WorldBuilding;
 using CreativeLongform.Domain.Entities;
@@ -729,7 +730,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
                     .ThenInclude(swe => swe.WorldElement)
                 .FirstAsync(r => r.Id == runId, cancellationToken);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             await PersistCancelledRunAsync(runId, pipelineSw);
             return;
@@ -971,7 +972,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
                     "Pipeline completed; scene and state snapshots saved.", cancellationToken, progress.ElapsedMs(), null, null);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             await PersistCancelledRunAsync(runId, pipelineSw);
         }
@@ -2048,7 +2049,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             """;
         var (text, _, _) = await ChatAndLogForRunAsync(db, ollama, model, run.Id, PipelineStep.AgentEdit, system, user,
             jsonFormat: false, proseOptions, cancellationToken: cancellationToken, progress,
-            AgentDelegationWaitLabel("Writer", req));
+            AgentDelegationWaitLabel("Writer", req), progressStep: "Writer");
         return DraftProseGuard.TrimRepetitiveLoops(LlmProseSanitizer.ProseForApplication(text).Trim());
     }
 
@@ -2092,7 +2093,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             """;
         var (text, _, _) = await ChatAndLogForRunAsync(db, ollama, model, run.Id, PipelineStep.AgentEdit, system, user,
             jsonFormat: false, options, cancellationToken: cancellationToken, progress,
-            AgentDelegationWaitLabel("Corrector", req));
+            AgentDelegationWaitLabel("Corrector", req), progressStep: "Corrector");
         return DraftProseGuard.TrimRepetitiveLoops(LlmProseSanitizer.ProseForApplication(text).Trim());
     }
 
@@ -2148,7 +2149,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             """;
         var (text, _, _) = await ChatAndLogForRunAsync(db, ollama, model, run.Id, PipelineStep.AgentEdit, system, user,
             jsonFormat: false, options, cancellationToken: cancellationToken, progress,
-            AgentDelegationWaitLabel("Editor", req));
+            AgentDelegationWaitLabel("Editor", req), progressStep: "Editor");
         return DraftProseGuard.TrimRepetitiveLoops(LlmProseSanitizer.ProseForApplication(text).Trim());
     }
 
@@ -2545,11 +2546,13 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         OllamaChatOptions? chatOptions = null,
         CancellationToken cancellationToken = default,
         PipelineProgress? progress = null,
-        string? progressSummary = null)
+        string? progressSummary = null,
+        string? progressStep = null)
     {
         if (audit.GenerationRunId is null && audit.BookId is null)
             throw new ArgumentException("Either GenerationRunId or BookId is required for LLM audit logging.");
 
+        var signalStep = progressStep ?? step.ToString();
         var messages = new List<OllamaChatMessage>
         {
             new("system", system),
@@ -2562,21 +2565,60 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
             format = jsonFormat ? "json" : (string?)null,
             num_predict = chatOptions?.NumPredict
         });
+        var llmCallId = Guid.NewGuid();
         if (progress is not null && audit.GenerationRunId is Guid progressRunIdForStart)
         {
             var startLabel = progressSummary ?? step.ToString();
-            await progress.Notifier.NotifyAsync(progressRunIdForStart, "LlmStarted", step.ToString(),
-                $"{startLabel}: waiting on model «{model}»…",
+            await progress.Notifier.NotifyAsync(progressRunIdForStart, "LlmStarted", signalStep,
+                $"{startLabel}: streaming from model «{model}»…",
                 cancellationToken,
                 progress.ElapsedMs(),
                 null,
-                null);
+                llmCallId);
+        }
+
+        var streamBatch = new StringBuilder();
+        var streamLock = new object();
+        var lastStreamFlush = Stopwatch.StartNew();
+        Func<OllamaStreamUpdate, CancellationToken, Task>? onStreamUpdate = null;
+        if (progress is not null && audit.GenerationRunId is Guid progressRunIdForStream)
+        {
+            onStreamUpdate = async (update, ct) =>
+            {
+                if (string.IsNullOrEmpty(update.Delta) && !update.Done)
+                    return;
+
+                lock (streamLock)
+                {
+                    if (!string.IsNullOrEmpty(update.Delta))
+                        streamBatch.Append(update.Delta);
+                }
+
+                var shouldFlush = update.Done ||
+                                  lastStreamFlush.ElapsedMilliseconds >= 200 ||
+                                  streamBatch.Length >= 512;
+                if (!shouldFlush)
+                    return;
+
+                string delta;
+                lock (streamLock)
+                {
+                    if (streamBatch.Length == 0)
+                        return;
+                    delta = streamBatch.ToString();
+                    streamBatch.Clear();
+                    lastStreamFlush.Restart();
+                }
+
+                await progress.Notifier.NotifyAsync(progressRunIdForStream, "LlmStreamChunk", signalStep,
+                    delta, ct, progress.ElapsedMs(), null, llmCallId);
+            };
         }
 
         var roundSw = Stopwatch.StartNew();
-        var result = await ollama.ChatAsync(model, messages, jsonFormat, chatOptions, cancellationToken);
+        var result = await ollama.ChatAsync(
+            model, messages, jsonFormat, chatOptions, onStreamUpdate, cancellationToken);
         roundSw.Stop();
-        var llmCallId = Guid.NewGuid();
         await db.LlmCalls.AddAsync(new LlmCall
         {
             Id = llmCallId,
@@ -2592,7 +2634,7 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         if (progress is not null && audit.GenerationRunId is Guid progressRunId)
         {
             var label = progressSummary ?? step.ToString();
-            await progress.Notifier.NotifyAsync(progressRunId, "LlmRoundtrip", step.ToString(),
+            await progress.Notifier.NotifyAsync(progressRunId, "LlmRoundtrip", signalStep,
                 $"{label}: model «{model}» returned {result.MessageText.Length:N0} characters in {roundSw.ElapsedMilliseconds} ms.",
                 cancellationToken,
                 progress.ElapsedMs(),
@@ -2615,7 +2657,8 @@ public sealed class GenerationOrchestrator : IGenerationOrchestrator
         OllamaChatOptions? chatOptions = null,
         CancellationToken cancellationToken = default,
         PipelineProgress? progress = null,
-        string? progressSummary = null)
+        string? progressSummary = null,
+        string? progressStep = null)
         => await ChatAndLogAsync(db, ollama, model, LlmAuditContext.ForRun(runId), step, system, user, jsonFormat,
-            chatOptions, cancellationToken, progress, progressSummary);
+            chatOptions, cancellationToken, progress, progressSummary, progressStep);
 }

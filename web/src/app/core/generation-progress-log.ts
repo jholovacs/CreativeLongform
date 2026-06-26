@@ -2,6 +2,16 @@ import { GenerationProgressPayload } from '../services/generation.service';
 
 export type GenerationLogKind = 'phase' | 'llm' | 'agent' | 'repair' | 'run' | 'other';
 
+/** Local-only log rows that must not replace the sticky pipeline status line. */
+export const GENERATION_LOCAL_LABEL_IGNORE_STEPS = new Set(['hub', 'run id']);
+
+export function shouldLocalEventUpdateNowLabel(step: string | null | undefined): boolean {
+  if (!step) {
+    return true;
+  }
+  return !GENERATION_LOCAL_LABEL_IGNORE_STEPS.has(step);
+}
+
 export interface GenerationLogEntry {
   id: string;
   at: Date;
@@ -13,6 +23,9 @@ export interface GenerationLogEntry {
   stepDurationMs: number | null;
   llmCallId: string | null;
 }
+
+/** Minimal log row shape for sticky-label resolution (component entries may carry extra fields). */
+export type GenerationLogLabelSource = Pick<GenerationLogEntry, 'eventName' | 'detail' | 'title'>;
 
 export function nextGenerationLogId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
@@ -103,6 +116,7 @@ export function generationLogTitle(eventName: string, p: GenerationProgressPaylo
 
 export function mapEventToKind(eventName: string): GenerationLogKind {
   switch (eventName) {
+    case 'LlmStarted':
     case 'LlmRoundtrip':
       return 'llm';
     case 'AgentEditTurn':
@@ -141,10 +155,36 @@ export function generationNowLabelForEvent(eventName: string, p: GenerationProgr
     case 'WorkingDocumentUpdated':
       return (p.step ?? '').trim() || 'Draft updated';
     case 'Local':
-      return detail || null;
+      if (detail && shouldLocalEventUpdateNowLabel(p.step)) {
+        return detail;
+      }
+      return null;
     default:
       return detail ? extractAgentNarrativeHeadline(detail) ?? detail : null;
   }
+}
+
+export function pickGenerationNowLabelFromLog(entries: readonly GenerationLogLabelSource[]): string | null {
+  const latest = entries.find((e) => e.eventName !== 'Local' && e.eventName !== 'LlmStreamChunk');
+  if (!latest) {
+    return null;
+  }
+  const fromDetail = extractAgentNarrativeHeadline(latest.detail) ?? latest.detail.trim();
+  if (fromDetail) {
+    return fromDetail;
+  }
+  return latest.title.trim() || null;
+}
+
+/**
+ * After SignalR JoinRun, replayed server events may already be in the log while the hub
+ * adds a local "Live events connected." row — restore the sticky label from server events.
+ */
+export function resolveGenerationNowLabelAfterHubConnect(
+  entries: readonly GenerationLogLabelSource[],
+  currentLabel: string | null
+): string | null {
+  return pickGenerationNowLabelFromLog(entries) ?? currentLabel;
 }
 
 export function buildGenerationLogEntry(eventName: string, p: GenerationProgressPayload): GenerationLogEntry {
