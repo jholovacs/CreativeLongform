@@ -53,6 +53,22 @@ export class ODataService {
     );
   }
 
+  /** Single generation run row (status is numeric OData enum). */
+  getGenerationRun(runId: string) {
+    const params = new HttpParams().set('$filter', `id eq ${runId}`).set('$top', '1').set('$select', 'id,status,failureReason');
+    return this.http
+      .get<ODataCollection<{ id: string; status: number | string; failureReason?: string | null }>>(
+        `${apiBaseUrl}/odata/GenerationRuns`,
+        { params }
+      )
+      .pipe(
+        map((res) => {
+          const rows = odataRows<{ id: string; status: number; failureReason?: string | null }>(res);
+          return rows[0] ?? null;
+        })
+      );
+  }
+
   /** Compliance / quality / transition verdict rows for a generation run (newest first). */
   getComplianceEvaluationsForRun(runId: string) {
     const filter = `generationRunId eq ${runId}`;

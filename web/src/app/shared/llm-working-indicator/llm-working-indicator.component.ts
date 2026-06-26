@@ -11,4 +11,6 @@ import { Component, Input } from '@angular/core';
 export class LlmWorkingIndicatorComponent {
   @Input() visible = false;
   @Input() label = 'Model is working…';
+  /** fixed = viewport footer banner; inline = flows in parent layout (e.g. modals). */
+  @Input() placement: 'fixed' | 'inline' = 'fixed';
 }

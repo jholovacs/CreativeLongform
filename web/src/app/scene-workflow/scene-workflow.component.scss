@@ -350,11 +350,27 @@
   .modal-panel.gen-log-modal {
     width: min(90vw, calc(100vw - 2rem));
     max-height: min(85vh, 36rem);
+    overflow: hidden;
     z-index: 1002;
+
+    .modal-header,
+    > .hint {
+      flex-shrink: 0;
+    }
+  }
+
+  .gen-log-modal-footer {
+    flex-shrink: 0;
+    margin-top: 0.75rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
   }
 
   .gen-log-now {
-    margin: 0 0 0.85rem;
+    margin: 0;
     padding: 0.65rem 0.75rem;
     border-radius: 8px;
     border: 1px solid var(--border);
@@ -362,10 +378,9 @@
   }
 
   .gen-log-scroll {
-    flex: 1;
+    flex: 1 1 auto;
     overflow: auto;
-    min-height: 12rem;
-    max-height: min(58vh, 28rem);
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 0.65rem;
@@ -559,6 +574,7 @@
   .gen-log-modal-actions {
     justify-content: space-between;
     flex-wrap: wrap;
+    margin-top: 0;
   }
 
   button.primary {

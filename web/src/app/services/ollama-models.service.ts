@@ -26,6 +26,8 @@ export interface OllamaModelAssignmentsDto {
   preStateModel: string;
   /** Post-scene state table model. */
   postStateModel: string;
+  /** Light prose touch-ups (tense, perspective, formatting). */
+  editorModel: string;
   /** Bitflags of roles forced in DB (server-defined; UI may show override badges). */
   dbOverriddenRoles: number[];
 }
@@ -82,6 +84,7 @@ export interface OllamaModelAssignmentsPatch {
   worldBuildingModel?: string | null;
   preStateModel?: string | null;
   postStateModel?: string | null;
+  editorModel?: string | null;
   /** When true, server clears writer override. */
   clearWriter?: boolean;
   clearCritic?: boolean;
@@ -89,6 +92,7 @@ export interface OllamaModelAssignmentsPatch {
   clearWorldBuilding?: boolean;
   clearPreState?: boolean;
   clearPostState?: boolean;
+  clearEditor?: boolean;
   /** Ollama API root (…/api). Empty clears DB override. */
   baseUrl?: string | null;
   clearBaseUrl?: boolean;

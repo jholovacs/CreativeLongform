@@ -70,6 +70,23 @@ public class OllamaModelPreferencesServiceTests
     }
 
     [Fact]
+    public async Task GetEditorModelAsync_cascades_to_writer_when_unset()
+    {
+        var (db, svc) = CreateService();
+        db.OllamaModelPreferences.Add(new OllamaModelPreferences
+        {
+            Id = OllamaModelPreferences.SingletonId,
+            WriterModel = "writer-db",
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var model = await svc.GetEditorModelAsync();
+
+        Assert.Equal("writer-db", model);
+    }
+
+    [Fact]
     public async Task UpdateAssignmentsAsync_writes_change_log_for_role()
     {
         var (db, svc) = CreateService();

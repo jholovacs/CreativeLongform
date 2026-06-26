@@ -8,10 +8,10 @@
   <header>
     <h1>Ollama models</h1>
     <p class="lede">
-      Assign models for scene prose (writer), analysis (critic), agentic JSON edits (agent), world-building features,
-      and narrative state JSON (pre-state / post-state). Pull library tags (with live download progress), remove
-      unused models from disk, import a GGUF, and browse the assignment change log in the collapsible sections below
-      (each closed by default).
+      Assign models for scene prose (writer), analysis (critic), agentic JSON edits (agent), light prose touch-ups
+      (editor), world-building features, and narrative state JSON (pre-state / post-state). Pull library tags (with
+      live download progress), remove unused models from disk, import a GGUF, and browse the assignment change log in
+      the collapsible sections below (each closed by default).
     </p>
   </header>
 
@@ -130,6 +130,20 @@
             Use default
           </button>
         </label>
+        <label [attr.title]="help.editor">
+          Editor (tense, perspective, formatting touch-ups)
+          <select [(ngModel)]="editorInput" [disabled]="modelSelectDisabled(editorInput)" [attr.title]="help.editor">
+            @if (modelSelectOptions(editorInput).length === 0) {
+              <option value="">No models available</option>
+            }
+            @for (opt of modelSelectOptions(editorInput); track opt.value) {
+              <option [value]="opt.value">{{ opt.label }}</option>
+            }
+          </select>
+          <button type="button" class="linkish" (click)="clearSlot('editor')" [disabled]="busy" [title]="help.useDefaultEditor">
+            Use default
+          </button>
+        </label>
         <label [attr.title]="help.worldBuilding">
           World-building (glossary, canon, suggestions)
           <select
@@ -243,6 +257,9 @@
                     </button>
                     <button type="button" (click)="pickInstalled(m.name, 'agent')" [disabled]="busy" [title]="help.tagPickAgent">
                       A
+                    </button>
+                    <button type="button" (click)="pickInstalled(m.name, 'editor')" [disabled]="busy" [title]="help.tagPickEditor">
+                      Ed
                     </button>
                     <button
                       type="button"
@@ -461,6 +478,7 @@
               <option value="3">World-building</option>
               <option value="4">Pre-state</option>
               <option value="5">Post-state</option>
+              <option value="7">Editor</option>
             </select>
           </label>
           <label class="log-field log-field-grow">

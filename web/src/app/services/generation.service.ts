@@ -106,10 +106,59 @@ export class GenerationService {
     return this.http.post<void>(`${apiBaseUrl}/api/scenes/${sceneId}/generation/${generationRunId}/cancel`, {});
   }
 
+  /** Stops a hub connection; safe when already stopped or null. */
+  async disconnectHub(connection: HubConnection | null | undefined): Promise<void> {
+    if (!connection) {
+      return;
+    }
+    try {
+      await connection.stop();
+    } catch {
+      /* already disconnected */
+    }
+  }
+
+  /**
+   * Connects, joins the run group, and resolves when live. Rejects if start or JoinRun fails.
+   * Prefer this over {@link connectToRun} so the UI can surface connection errors and avoid orphaned handlers.
+   */
+  async connectToRunAsync(
+    runId: string,
+    handlers: {
+      onProgress?: (eventName: string, payload: GenerationProgressPayload) => void;
+      onFinished?: (payload: GenerationProgressPayload) => void;
+    }
+  ): Promise<HubConnection> {
+    const connection = this.buildRunConnection(runId, handlers);
+    try {
+      await connection.start();
+      await connection.invoke('JoinRun', runId);
+      return connection;
+    } catch (err) {
+      await this.disconnectHub(connection);
+      throw err;
+    }
+  }
+
   connectToRun(
     runId: string,
     handlers: {
       /** All pipeline events except RunFinished (use onFinished). */
+      onProgress?: (eventName: string, payload: GenerationProgressPayload) => void;
+      onFinished?: (payload: GenerationProgressPayload) => void;
+    }
+  ): HubConnection {
+    const connection = this.buildRunConnection(runId, handlers);
+    void connection
+      .start()
+      .then(() => connection.invoke('JoinRun', runId))
+      .catch((err) => console.error('SignalR connection failed', err));
+    return connection;
+  }
+
+  private buildRunConnection(
+    runId: string,
+    handlers: {
       onProgress?: (eventName: string, payload: GenerationProgressPayload) => void;
       onFinished?: (payload: GenerationProgressPayload) => void;
     }
@@ -124,17 +173,15 @@ export class GenerationService {
     connection.on('StepStarted', (payload: GenerationProgressPayload) => emit('StepStarted', payload));
     connection.on('RunStarted', (payload: GenerationProgressPayload) => emit('RunStarted', payload));
     connection.on('AgentEditTurn', (payload: GenerationProgressPayload) => emit('AgentEditTurn', payload));
+    connection.on('AgentEditAction', (payload: GenerationProgressPayload) => emit('AgentEditAction', payload));
+    connection.on('AgentEditResult', (payload: GenerationProgressPayload) => emit('AgentEditResult', payload));
+    connection.on('AgentEditStatus', (payload: GenerationProgressPayload) => emit('AgentEditStatus', payload));
     connection.on('RepairAttempt', (payload: GenerationProgressPayload) => emit('RepairAttempt', payload));
     connection.on('RepairDraftApplied', (payload: GenerationProgressPayload) => emit('RepairDraftApplied', payload));
     connection.on('DraftReviewNote', (payload: GenerationProgressPayload) => emit('DraftReviewNote', payload));
     connection.on('LlmStarted', (payload: GenerationProgressPayload) => emit('LlmStarted', payload));
     connection.on('LlmRoundtrip', (payload: GenerationProgressPayload) => emit('LlmRoundtrip', payload));
     connection.on('RunFinished', (payload: GenerationProgressPayload) => handlers.onFinished?.(payload));
-
-    void connection
-      .start()
-      .then(() => connection.invoke('JoinRun', runId))
-      .catch((err) => console.error('SignalR connection failed', err));
 
     return connection;
   }

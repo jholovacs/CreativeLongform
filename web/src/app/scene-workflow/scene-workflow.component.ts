@@ -6,6 +6,13 @@ import { HubConnection } from '@microsoft/signalr';
 import { forkJoin, Subject, Subscription } from 'rxjs';
 import { concatMap, debounceTime, distinctUntilChanged, takeUntil } from 'rxjs/operators';
 import { formatJsonPretty, isEmptyStateJson, jsonFieldToText } from '../core/json-format';
+import {
+  GENERATION_RUN_STATUS,
+  generationRunFinishedStep,
+  isActiveGenerationRunStatus,
+  isTerminalGenerationRunStatus,
+  normalizeGenerationRunStatus
+} from '../core/generation-run-status';
 import { Book, Chapter, Scene, WorldElement } from '../models/entities';
 import { GenerationService, GenerationProgressPayload } from '../services/generation.service';
 import { ODataService } from '../services/odata.service';
@@ -149,6 +156,10 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   draftTargetMaxWords = 2000;
 
   private hub: HubConnection | null = null;
+  /** Bumped on hub teardown so stale async connect handlers are ignored. */
+  private generationHubSession = 0;
+  /** Prevents double-handling RunFinished (SignalR + OData sync). */
+  private finishedGenerationRunId: string | null = null;
 
   private static readonly storyPositionStorageKey = 'clf.sceneWorkflow.storyPosition';
   private static readonly qualityThresholdsStorageKey = 'clf.sceneWorkflow.qualityThresholds';
@@ -184,7 +195,7 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     }
     this.destroy$.next();
     this.destroy$.complete();
-    void this.hub?.stop();
+    void this.teardownGenerationHub();
   }
 
   onWorldElementsSearchInput(value: string): void {
@@ -1044,27 +1055,73 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
   }
 
+  /** Human-readable title for a generation log row. */
+  private generationLogTitle(eventName: string, p: GenerationProgressPayload, stepLabel: string): string {
+    const detail = (p.detail ?? '').trim();
+    const narrative = this.extractAgentNarrativeHeadline(detail);
+    if (narrative) {
+      return narrative;
+    }
+
+    const agentTool = (p.step ?? '').replace(/_/g, ' ').trim();
+    switch (eventName) {
+      case 'LlmRoundtrip':
+      case 'LlmStarted':
+        if (p.step === 'AgentEdit') {
+          const agentLine = this.extractAgentNarrativeHeadline(detail);
+          if (agentLine) {
+            return agentLine;
+          }
+        }
+        return stepLabel.includes('is reworking') ? stepLabel : `LLM · ${stepLabel}`;
+      case 'RunStarted':
+        return 'Pipeline started';
+      case 'AgentEditStatus':
+        return detail.split('\n')[0]?.trim() || 'Agent';
+      case 'AgentEditAction':
+        return agentTool ? `Agent → ${agentTool}` : 'Agent action';
+      case 'AgentEditResult':
+        return agentTool ? `Agent ← ${agentTool}` : 'Agent result';
+      case 'AgentEditTurn':
+        return 'Agent edit';
+      case 'RepairDraftApplied':
+        return 'Repair — draft updated';
+      case 'DraftReviewNote':
+        return 'Compliance / quality note';
+      case 'Local':
+        return 'Status';
+      default:
+        return stepLabel;
+    }
+  }
+
+  /** First line of agent detail when it reads like a narrative status (not raw JSON/tool dump). */
+  private extractAgentNarrativeHeadline(detail: string): string | null {
+    if (!detail) {
+      return null;
+    }
+    const line = detail.split('\n').find((l) => l.trim().length > 0)?.trim() ?? '';
+    if (!line || line.startsWith('Action JSON') || line.startsWith('Tool response') || line.startsWith('Turn ')) {
+      return null;
+    }
+    if (/^(Agent|Writer|Editor|Corrector|That step|Replaced|Replace |Compliance|Search |Script |Writer rewrite|Editor touch|Corrector fixes)/i.test(line)) {
+      return line;
+    }
+    const delegationWait = line.match(/^(Writer|Editor|Corrector) is reworking .+?(?=:|$)/);
+    if (delegationWait) {
+      return delegationWait[0].replace(/:$/, '').trim();
+    }
+    return null;
+  }
+
   private pushProgressEvent(eventName: string, p: GenerationProgressPayload): void {
     this.updateGenerationNow(eventName, p);
-    if (eventName === 'LlmStarted') {
+    if (eventName === 'LlmStarted' && p.step !== 'AgentEdit') {
       return;
     }
     const kind = this.mapEventToKind(eventName);
     const stepLabel = (p.step ?? '').replace(/_/g, ' ').trim() || eventName;
-    const title =
-      eventName === 'LlmRoundtrip'
-        ? `LLM · ${stepLabel}`
-        : eventName === 'RunStarted'
-          ? 'Pipeline started'
-          : eventName === 'AgentEditTurn'
-            ? 'Agent edit'
-            : eventName === 'RepairDraftApplied'
-              ? 'Repair — draft updated'
-              : eventName === 'DraftReviewNote'
-                ? 'Compliance / quality note'
-                : eventName === 'Local'
-                ? 'Status'
-                : stepLabel;
+    const title = this.generationLogTitle(eventName, p, stepLabel);
     const detail = (p.detail ?? '').trim();
     const entry: GenerationLogEntry = {
       id: this.nextLogId(),
@@ -1089,15 +1146,18 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     const detail = (p.detail ?? '').trim();
     switch (eventName) {
       case 'LlmStarted':
-        this.generationNowLabel = detail || `Waiting on model (${p.step ?? 'LLM'})…`;
+        this.generationNowLabel = this.extractAgentNarrativeHeadline(detail) ?? (detail || `Waiting on model (${p.step ?? 'LLM'})…`);
         break;
       case 'LlmRoundtrip':
-        this.generationNowLabel = 'Processing model response…';
+        this.generationNowLabel = this.extractAgentNarrativeHeadline(detail) ?? 'Processing model response…';
         break;
       case 'StepStarted':
       case 'RunStarted':
       case 'AgentEditTurn':
-        this.generationNowLabel = detail || (p.step ?? 'Working…');
+      case 'AgentEditAction':
+      case 'AgentEditResult':
+      case 'AgentEditStatus':
+        this.generationNowLabel = this.extractAgentNarrativeHeadline(detail) ?? (detail || (p.step ?? 'Working…'));
         break;
       case 'Local':
         if (detail) {
@@ -1112,6 +1172,9 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
       case 'LlmRoundtrip':
         return 'llm';
       case 'AgentEditTurn':
+      case 'AgentEditAction':
+      case 'AgentEditResult':
+      case 'AgentEditStatus':
         return 'agent';
       case 'RepairAttempt':
       case 'RepairDraftApplied':
@@ -1308,61 +1371,165 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
     });
     this.generationRunId = null;
     this.pendingReviewRunId = null;
-    void this.hub?.stop();
+    this.finishedGenerationRunId = null;
+    this.generationStartSub?.unsubscribe();
 
     const sceneId = this.selectedSceneId;
     this.onQualityThresholdsChange();
     this.onDraftWordRangeChange();
-    this.generationStartSub?.unsubscribe();
-    this.generationStartSub = this.world
-      .putSceneWorldElements(sceneId, [...this.selectedWorldIds])
-      .pipe(
-        concatMap(() => this.patchSceneFields$()),
-        concatMap(() =>
-          this.generation.startGeneration(sceneId, {
-            stopAfterDraft: true,
-            minWordsOverride: this.draftTargetMinWords,
-            maxWordsOverride: this.draftTargetMaxWords,
-            qualityAcceptMinScore: this.qualityAcceptMinScore,
-            qualityReviewOnlyMinScore: this.qualityReviewOnlyMinScore
-          })
+    const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+
+    void this.teardownGenerationHub().then(() => {
+      this.generationStartSub = this.world
+        .putSceneWorldElements(sceneId, [...this.selectedWorldIds])
+        .pipe(
+          concatMap(() => this.patchSceneFields$()),
+          concatMap(() =>
+            this.generation.startGeneration(sceneId, {
+              idempotencyKey,
+              stopAfterDraft: true,
+              minWordsOverride: this.draftTargetMinWords,
+              maxWordsOverride: this.draftTargetMaxWords,
+              qualityAcceptMinScore: this.qualityAcceptMinScore,
+              qualityReviewOnlyMinScore: this.qualityReviewOnlyMinScore
+            })
+          )
         )
-      )
-      .subscribe({
-        next: (res) => {
-          this.generationRunId = res.id;
-          this.pushProgressEvent('Local', {
-            runId: res.id,
-            step: 'run id',
-            detail: `Connected to generation run ${res.id}. Subscribing to live events…`,
-            elapsedMs: null,
-            stepDurationMs: null,
-            llmCallId: null
-          });
-          this.hub = this.generation.connectToRun(res.id, {
-            onProgress: (eventName, p) => this.pushProgressEvent(eventName, p),
-            onFinished: (p) => this.onGenerationFinished(p)
-          });
+        .subscribe({
+          next: (res) => {
+            this.generationRunId = res.id;
+            this.pushProgressEvent('Local', {
+              runId: res.id,
+              step: 'run id',
+              detail: `Generation run ${res.id} started. Connecting to live events…`,
+              elapsedMs: null,
+              stepDurationMs: null,
+              llmCallId: null
+            });
+            this.attachToGenerationRun(res.id);
+          },
+          error: () => {
+            this.busy = false;
+            this.pushProgressEvent('Local', {
+              runId: '',
+              step: 'error',
+              detail: 'Request failed — see error dialog for full details.',
+              elapsedMs: null,
+              stepDurationMs: null,
+              llmCallId: null
+            });
+          }
+        });
+    });
+  }
+
+  /** Disconnect any prior hub and subscribe to progress for a new run. */
+  private attachToGenerationRun(runId: string): void {
+    const session = this.generationHubSession;
+    void this.generation
+      .connectToRunAsync(runId, {
+        onProgress: (eventName, p) => {
+          if (session !== this.generationHubSession) {
+            return;
+          }
+          this.pushProgressEvent(eventName, p);
         },
-        error: () => {
-          this.busy = false;
-          this.pushProgressEvent('Local', {
-            runId: '',
-            step: 'error',
-            detail: 'Request failed — see error dialog for full details.',
-            elapsedMs: null,
-            stepDurationMs: null,
-            llmCallId: null
-          });
+        onFinished: (p) => {
+          if (session !== this.generationHubSession) {
+            return;
+          }
+          this.onGenerationFinished(p);
         }
+      })
+      .then((conn) => {
+        if (session !== this.generationHubSession) {
+          void this.generation.disconnectHub(conn);
+          return;
+        }
+        this.hub = conn;
+        this.pushProgressEvent('Local', {
+          runId,
+          step: 'hub',
+          detail: 'Live events connected.',
+          elapsedMs: null,
+          stepDurationMs: null,
+          llmCallId: null
+        });
+        this.generationNowLabel = 'Live — pipeline running…';
+        this.syncGenerationRunStateIfTerminal(runId, session);
+      })
+      .catch((err: unknown) => {
+        if (session !== this.generationHubSession) {
+          return;
+        }
+        this.busy = false;
+        const msg = err instanceof Error ? err.message : String(err);
+        this.pushProgressEvent('Local', {
+          runId,
+          step: 'error',
+          detail: `Could not connect to live progress (SignalR). ${msg} Try again or refresh the page.`,
+          elapsedMs: null,
+          stepDurationMs: null,
+          llmCallId: null
+        });
+        this.generationNowLabel = null;
       });
   }
 
+  /** If RunFinished was emitted before JoinRun (e.g. fast cancel), reconcile from OData. */
+  private syncGenerationRunStateIfTerminal(runId: string, session: number): void {
+    this.odata.getGenerationRun(runId).subscribe({
+      next: (row) => {
+        if (session !== this.generationHubSession || !row) {
+          return;
+        }
+        const status = normalizeGenerationRunStatus(row.status);
+        if (isActiveGenerationRunStatus(status) || !isTerminalGenerationRunStatus(status)) {
+          return;
+        }
+        const step = generationRunFinishedStep(status!);
+        const detail =
+          status === GENERATION_RUN_STATUS.Failed
+            ? row.failureReason ?? 'Generation failed.'
+            : status === GENERATION_RUN_STATUS.Cancelled
+              ? 'Generation was cancelled.'
+              : status === GENERATION_RUN_STATUS.AwaitingUserReview
+                ? 'Draft is ready for your review in the app.'
+                : 'Pipeline completed.';
+        this.onGenerationFinished({
+          runId,
+          step,
+          detail,
+          elapsedMs: null,
+          stepDurationMs: null,
+          llmCallId: null
+        });
+      },
+      error: () => {
+        /* optional reconciliation */
+      }
+    });
+  }
+
+  private async teardownGenerationHub(): Promise<void> {
+    this.generationHubSession += 1;
+    const hub = this.hub;
+    this.hub = null;
+    await this.generation.disconnectHub(hub);
+  }
+
   private onGenerationFinished(p: GenerationProgressPayload): void {
+    const runId = p.runId?.trim() ?? this.generationRunId;
+    if (runId && this.finishedGenerationRunId === runId) {
+      return;
+    }
+    if (runId) {
+      this.finishedGenerationRunId = runId;
+    }
     this.pushProgressEvent('RunFinished', p);
     this.busy = false;
-    void this.hub?.stop();
-    this.hub = null;
+    this.generationNowLabel = null;
+    void this.teardownGenerationHub();
     const step = p.step;
     if (step === 'AwaitingUserReview') {
       const sceneId = this.selectedSceneId;
@@ -1378,12 +1545,17 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
   cancelDraftGeneration(): void {
     this.generationStartSub?.unsubscribe();
     this.generationStartSub = undefined;
-    if (!this.selectedSceneId) {
+    const sceneId = this.selectedSceneId;
+    const runId = this.generationRunId;
+    void this.teardownGenerationHub();
+    this.generationRunId = null;
+    this.busy = false;
+    this.generationNowLabel = null;
+    if (!sceneId) {
       return;
     }
     this.error = null;
-    if (!this.generationRunId) {
-      this.busy = false;
+    if (!runId) {
       this.pushProgressEvent('Local', {
         runId: '',
         step: 'cancel',
@@ -1394,12 +1566,12 @@ export class SceneWorkflowComponent implements OnInit, OnDestroy {
       });
       return;
     }
-    this.generation.cancelGeneration(this.selectedSceneId, this.generationRunId).subscribe({
+    this.generation.cancelGeneration(sceneId, runId).subscribe({
       next: () => {
         this.pushProgressEvent('Local', {
-          runId: this.generationRunId ?? '',
+          runId,
           step: 'cancel',
-          detail: 'Cancellation requested — stopping after the current step completes.',
+          detail: 'Cancellation requested — run will stop after the current step completes.',
           elapsedMs: null,
           stepDurationMs: null,
           llmCallId: null

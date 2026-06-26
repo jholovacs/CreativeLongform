@@ -19,6 +19,7 @@ public interface IOllamaModelPreferencesService
     Task<string> GetWorldBuildingModelAsync(CancellationToken cancellationToken = default);
     Task<string> GetPreStateModelAsync(CancellationToken cancellationToken = default);
     Task<string> GetPostStateModelAsync(CancellationToken cancellationToken = default);
+    Task<string> GetEditorModelAsync(CancellationToken cancellationToken = default);
 
     Task<OllamaConnectionSettingsDto> GetConnectionSettingsAsync(CancellationToken cancellationToken = default);
 }
@@ -31,6 +32,7 @@ public sealed class OllamaModelAssignmentsDto
     public string WorldBuildingModel { get; init; } = "";
     public string PreStateModel { get; init; } = "";
     public string PostStateModel { get; init; } = "";
+    public string EditorModel { get; init; } = "";
     /// <summary>Per-role: value comes from DB override vs configuration default.</summary>
     public OllamaModelRole[] DbOverriddenRoles { get; init; } = [];
 }
@@ -43,6 +45,7 @@ public sealed class OllamaModelAssignmentsPatch
     public string? WorldBuildingModel { get; set; }
     public string? PreStateModel { get; set; }
     public string? PostStateModel { get; set; }
+    public string? EditorModel { get; set; }
     /// <summary>When true, clear DB override for that slot (fall back to appsettings).</summary>
     public bool? ClearWriter { get; set; }
     public bool? ClearCritic { get; set; }
@@ -50,6 +53,7 @@ public sealed class OllamaModelAssignmentsPatch
     public bool? ClearWorldBuilding { get; set; }
     public bool? ClearPreState { get; set; }
     public bool? ClearPostState { get; set; }
+    public bool? ClearEditor { get; set; }
     /// <summary>Ollama API root (…/api). Empty string clears override.</summary>
     public string? BaseUrl { get; set; }
     /// <summary>When true, clear DB override for Ollama URL (fall back to appsettings / env).</summary>

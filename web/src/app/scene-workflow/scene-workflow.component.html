@@ -829,14 +829,10 @@
       </div>
       <p class="hint">
         Live updates from the server: pipeline phases, each LLM call (timings in the header; use “Load full LLM request &amp;
-        response” to pull the saved request and output from the database), agent edits, compliance/quality notes, and
-        timings. While a model call is running, the banner below shows what the server is waiting on.
+        response” to pull the saved request and output from the database), agent actions and tool responses (each turn logs
+        what the agent chose and what the tool returned), compliance/quality notes, and timings. While a model call is running,
+        the status line above the buttons shows what the server is waiting on.
       </p>
-      @if (busy && generationNowLabel) {
-        <div class="gen-log-now" role="status" aria-live="polite">
-          <app-llm-working-indicator [visible]="true" [label]="generationNowLabel" />
-        </div>
-      }
       <div
         class="gen-log-scroll"
         role="log"
@@ -912,13 +908,20 @@
           </article>
         }
       </div>
-      <div class="modal-actions gen-log-modal-actions">
-        @if (busy && generationRunId) {
-          <button type="button" class="danger" (click)="cancelDraftGeneration()" [title]="fieldHelp.cancelGeneration">
-            Cancel generation
-          </button>
+      <div class="gen-log-modal-footer">
+        @if (busy && generationNowLabel) {
+          <div class="gen-log-now" role="status" aria-live="polite">
+            <app-llm-working-indicator placement="inline" [visible]="true" [label]="generationNowLabel" />
+          </div>
         }
-        <button type="button" (click)="closeGenerationLogModal()">Close</button>
+        <div class="modal-actions gen-log-modal-actions">
+          @if (busy && generationRunId) {
+            <button type="button" class="danger" (click)="cancelDraftGeneration()" [title]="fieldHelp.cancelGeneration">
+              Cancel generation
+            </button>
+          }
+          <button type="button" (click)="closeGenerationLogModal()">Close</button>
+        </div>
       </div>
     </div>
   }

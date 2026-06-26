@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using CreativeLongform.Application.Abstractions;
 using CreativeLongform.Application.Generation;
@@ -12,7 +14,7 @@ namespace CreativeLongform.Application.Services;
 /// <summary>
 /// Paragraph-addressable tool loop: read_section, propose_patch, finish (JSON only).
 /// </summary>
-public static class AgenticEditLoop
+public static partial class AgenticEditLoop
 {
     private const int FullDraftCharBudget = 60_000;
     private const int SummaryPrefixChars = 400;
@@ -22,24 +24,57 @@ public static class AgenticEditLoop
     private const int ProgressPatchExcerptChars = 7000;
 
     private static readonly string SystemPrompt = """
-        You are a fiction editor agent refining a scene draft. You improve clarity, pacing, and alignment with instructions using tools.
+        You are an orchestrating fiction editor agent. You refine scene drafts until they match the author's instructions, pass compliance, and read with strong craft — using tools instead of blind full-scene rewrites.
+
+        BOOK DIRECTIVES (tone, content style, synopsis) appear in every user message — honor them in every edit and delegation.
+
         Respond with a single JSON object only (no markdown fences). Property names are case-insensitive.
 
         Tools:
-        - { "action": "read_section", "paragraphStart": <int>, "paragraphEnd": <int> } — inclusive paragraph indices (0..N-1). Use to read full text when the draft view is summarized.
-        - { "action": "propose_patch", "paragraphStart": <int>, "paragraphEnd": <int>, "replacement": "<prose>", "reason": "<why this edit>" } — replace inclusive range with new prose. Include "reason" (one or two sentences: what you are improving and why). Replacement may use blank lines to split into multiple paragraphs.
-        - { "action": "finish", "reason": "<short reason>" } — the draft is acceptable; stop editing.
+        - { "action": "read_section", "paragraphStart": <int>, "paragraphEnd": <int> } — inclusive paragraph indices (0..N-1).
+        - { "action": "find_text", "pattern": "<literal or regex>", "useRegex": <bool>, "caseSensitive": <bool>, "paragraphStart": <int optional>, "paragraphEnd": <int optional>, "maxMatches": <int optional> } — search the draft without an LLM; returns ¶index, char offset, and excerpt for each match.
+        - { "action": "replace_text", "pattern": "<literal or regex>", "replacement": "<text>", "useRegex": <bool>, "caseSensitive": <bool>, "paragraphStart": <int optional>, "paragraphEnd": <int optional>, "maxReplacements": <int optional>, "previewOnly": <bool optional> } — programmatic find/replace (no LLM).
+        - { "action": "swap_text", "excerptA": "<first selection>", "excerptB": "<second selection>", "useRegex": <bool>, "caseSensitive": <bool>, "paragraphStart": <int optional>, "paragraphEnd": <int optional>, "previewOnly": <bool optional> } — exchange two located text selections (same or different ¶s). Aliases: excerpt+text or pattern+replacement. Use find_text to locate unique excerpts first.
+        - { "action": "patch_text", "mode": "<mode>", "paragraphStart": <int>, "paragraphEnd": <int optional>, "excerpt": "<locator>", "text": "<payload>", "useRegex": <bool>, "caseSensitive": <bool> } — surgical excerpt edits without full ¶ replace. Modes: replace_excerpt | remove_excerpt | insert_before_excerpt | insert_after_excerpt | append_paragraph | prepend_paragraph.
+        - { "action": "query_lore", "query": "<keywords>", "scope": "scene"|"book"|"relationships"|"all" } — world elements, book notes, relationships.
+        - { "action": "query_timeline", "query": "<keywords optional>", "when": "before"|"after"|"all"|"current" } — other scenes in story order for continuity (never contradict earlier/later canon).
+        - { "action": "run_compliance_check" } — compliance on CURRENT full draft (perspective, POV, tense, grammar/punctuation, canon).
+        - { "action": "invoke_writer", "paragraphStart": <int>, "paragraphEnd": <int>, "instruction": "<brief>", "focusExcerpt": "<optional>", "contextParagraphsBefore": <int>, "contextParagraphsAfter": <int>, "complianceNotes": "<optional>", "reason": "<why>" } — creative rewrite; YOU choose how much context the delegated model needs via focusExcerpt and contextParagraphsBefore/After.
+        - { "action": "invoke_editor", ... same optional scope fields ... } — light touch-ups (tense, perspective, formatting).
+        - { "action": "invoke_corrector", ... same optional scope fields ... } — grammar/punctuation.
+        - { "action": "propose_patch", "paragraphStart": <int>, "paragraphEnd": <int>, "replacement": "<prose>", "reason": "<why>" } — apply your own replacement directly.
+        - { "action": "run_script", "steps": [ { ...tool json... }, ... ], "reason": "<why>" } — batch up to 12 surgical steps (find → patch → replace, multiple localized fixes). Stops on first error. No nested run_script or finish inside scripts.
+        - { "action": "finish", "reason": "<short reason>" } — stop ONLY after run_compliance_check returned pass:true on the CURRENT draft.
 
-        Rules:
-        - Prefer small targeted patches; avoid rewriting the whole scene unless necessary.
-        - Preserve continuity, voice, and facts implied by scene instructions and world context.
-        - CONTENT PRESERVATION (non-negotiable): Every propose_patch replacement MUST keep all plot-critical substance from the replaced paragraphs—reveals, twists, decisions, stakes, foreshadowing, on-page events, dialogue commitments, and causal links. Do not "tighten" or "streamline" by deleting story beats, compressing scenes into summary, or replacing dramatized moments with abstract narration. If you cannot improve wording without losing any of that substance, use finish instead.
-        - Patches are line edits: same story, clearer or more vivid prose. Never substitute a shorter synopsis of events for the original prose.
-        - Show, don't tell: patches should add or refine concrete action, dialogue, and sensory detail; avoid replacing dramatized beats with abstract emotional labels or explanatory narration unless the author instruction requires it.
-        - Reference variety: do not lean on repeating characters' full names every time they appear. Mix in relationship to the viewpoint character (e.g. "her brother", "the detective"), role or attitude from the POV ("the woman who'd lied to him"), physical or situational anchors ("the man at the bar"), and occasional name use for clarity—especially on first introduction or when many people are in the scene.
-        - HARD CONSTRAINT: Do not introduce named characters, relationships, or plot events not already allowed by the scene synopsis/instructions and the Linked world-building / relationship text in the user message. Do not invent story beats to "improve" the scene.
-        - Summarized draft view: you only see short previews per paragraph. You MUST call read_section on a prior turn for an inclusive range that fully covers any paragraph range before you propose_patch that same range (the server enforces this). Do not patch blind.
-        - Indices always refer to the CURRENT draft shown in the message (after any prior patches in this session).
+        Script strategy (multi-target fixes):
+        - Use run_script to chain localization + fix steps: find_text → swap_text, patch_text, or replace_text for several compliance items in one turn.
+        - query_timeline / query_lore whenever continuity or canon is uncertain — always allowed alongside edits.
+        - On tool misuse you receive corrective hints; on unknown actions you receive the full tool list. The loop only aborts after many consecutive failures — fix your JSON and retry.
+
+        Text manipulation strategy:
+        - find_text → replace_text, swap_text, or patch_text for mechanical/local fixes; invoke_* when rewriting phrasing or voice.
+        - swap_text when two passages or phrases should trade places (e.g. reorder sentences, fix transposed phrases).
+        - patch_text for insert/remove/replace around a unique excerpt without rewriting whole paragraphs.
+
+        Compliance-driven correction loop (mandatory when run_compliance_check is available):
+        1. run_compliance_check on the current draft.
+        2. If pass:false — read_section cited ranges, then fix EVERY violation. Quote fixInstructions verbatim in invoke_* instructions.
+        3. After substantive edits, run_compliance_check again until pass:true or turns exhausted.
+        4. Re-invoke delegated models with NEW instructions when fixes were incomplete.
+        5. Do not finish while pass:false.
+
+        Model selection:
+        - find_text + replace_text / swap_text / patch_text — mechanical fixes without an LLM.
+        - propose_patch — one word or short phrase you apply directly.
+        - invoke_corrector — grammar/spelling/punctuation.
+        - invoke_editor — tense, POV, formatting.
+        - invoke_writer — creative rewrite or voice overhaul.
+
+        Strategy:
+        - query_lore / query_timeline when unsure → read_section → fix tools or run_script → run_compliance_check → finish.
+        - Preserve plot-critical substance; never compress dramatized beats into summary.
+        - Summarized draft view: read_section before invoke_* or propose_patch on that range.
+        - Indices refer to the CURRENT draft (after prior patches in this session).
         """;
 
     public static async Task<string> RunAsync(
@@ -53,13 +88,27 @@ public static class AgenticEditLoop
         IGenerationProgressNotifier notifier,
         Guid runId,
         Func<long> pipelineElapsedMs,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AgentEditRunOptions? runOptions = null)
     {
         var paragraphs = SplitParagraphs(initialDraft);
         if (paragraphs.Count == 0)
             return initialDraft;
 
-        var readRanges = new List<(int start, int end)>();
+        var state = new AgentEditLoopState
+        {
+            Paragraphs = paragraphs,
+            RunOptions = runOptions,
+            Logger = logger,
+            Notifier = notifier,
+            RunId = runId,
+            PipelineElapsedMs = pipelineElapsedMs,
+            CancellationToken = cancellationToken
+        };
+
+        var maxConsecutiveFailures = runOptions?.MaxConsecutiveToolFailures ?? AgentToolRegistry.DefaultMaxConsecutiveFailures;
+        var consecutiveFailures = 0;
+        ComplianceVerdict? lastComplianceVerdict = null;
         string? lastToolResult = null;
         for (var turn = 1; turn <= maxTurns; turn++)
         {
@@ -69,12 +118,16 @@ public static class AgenticEditLoop
                 sceneInstructions,
                 expectedEndNotes,
                 worldBlock,
+                runOptions?.BookDirectiveBlock,
                 turn,
                 maxTurns,
                 paragraphs.Count,
                 numbered,
                 lastToolResult,
-                paragraphingWarning);
+                paragraphingWarning,
+                lastComplianceVerdict);
+
+            await AgentEditProgress.NotifyStatusAsync(state, AgentEditNarrative.DescribeThinking(state));
 
             var turnSw = Stopwatch.StartNew();
             var (raw, _, llmCallId) = await chatJsonAsync(SystemPrompt, user, cancellationToken);
@@ -89,163 +142,83 @@ public static class AgenticEditLoop
             {
                 logger.LogWarning(ex, "Agentic edit turn {Turn}: invalid JSON", turn);
                 lastToolResult = $"Error: output was not valid JSON. Fix and try again. Raw (truncated): {Truncate(cleaned, ToolResultTruncationChars)}";
-                await notifier.NotifyAsync(runId, "AgentEditTurn", nameof(PipelineStep.AgentEdit),
-                    $"Turn {turn}/{maxTurns}: model returned invalid JSON; the editor will retry. ({turnSw.ElapsedMilliseconds} ms for LLM)",
-                    cancellationToken,
-                    pipelineElapsedMs(),
-                    turnSw.ElapsedMilliseconds,
-                    llmCallId);
+                consecutiveFailures++;
+                lastToolResult = AgentToolRegistry.AppendFailureBudget(lastToolResult, consecutiveFailures, maxConsecutiveFailures);
+                await AgentEditProgress.NotifyActionAttemptAsync(state, turn, maxTurns, cleaned, llmCallId, turnSw.ElapsedMilliseconds,
+                    "model returned invalid JSON — will retry");
+                await AgentEditProgress.NotifyResultAsync(state, turn, maxTurns, "parse_error", AgentToolExecuteStatus.Error,
+                    lastToolResult, llmCallId, turnSw.ElapsedMilliseconds);
+                if (consecutiveFailures >= maxConsecutiveFailures)
+                {
+                    logger.LogWarning("Agentic edit aborted after {Count} consecutive failures (invalid JSON)", consecutiveFailures);
+                    break;
+                }
+
                 continue;
             }
 
             if (action is null || string.IsNullOrWhiteSpace(action.Action))
             {
                 lastToolResult = "Error: missing \"action\" in JSON.";
-                await notifier.NotifyAsync(runId, "AgentEditTurn", nameof(PipelineStep.AgentEdit),
-                    $"Turn {turn}/{maxTurns}: JSON missing \"action\" field. ({turnSw.ElapsedMilliseconds} ms)",
-                    cancellationToken,
-                    pipelineElapsedMs(),
-                    turnSw.ElapsedMilliseconds,
-                    llmCallId);
+                consecutiveFailures++;
+                lastToolResult = AgentToolRegistry.AppendFailureBudget(lastToolResult, consecutiveFailures, maxConsecutiveFailures);
+                await AgentEditProgress.NotifyActionAttemptAsync(state, turn, maxTurns, cleaned, llmCallId, turnSw.ElapsedMilliseconds,
+                    "JSON missing \"action\" field");
+                await AgentEditProgress.NotifyResultAsync(state, turn, maxTurns, "parse_error", AgentToolExecuteStatus.Error,
+                    lastToolResult, llmCallId, turnSw.ElapsedMilliseconds);
+                if (consecutiveFailures >= maxConsecutiveFailures)
+                {
+                    logger.LogWarning("Agentic edit aborted after {Count} consecutive failures (missing action)", consecutiveFailures);
+                    break;
+                }
+
                 continue;
             }
 
             var kind = action.Action.Trim().ToLowerInvariant();
+            await AgentEditProgress.NotifyActionAsync(state, turn, maxTurns, action, llmCallId, turnSw.ElapsedMilliseconds);
+            var toolResult = await AgentEditToolSteps.ExecuteAsync(state, action, allowFinish: true, turn, maxTurns, turnSw, llmCallId);
 
-            switch (kind)
+            lastToolResult = toolResult.Message;
+            lastComplianceVerdict = state.LastComplianceVerdict;
+
+            if (toolResult.Status == AgentToolExecuteStatus.Error || AgentToolRegistry.IsErrorResult(lastToolResult))
             {
-                case "finish":
-                    logger.LogInformation("Agentic edit finished at turn {Turn}: {Reason}", turn, action.Reason ?? "");
-                    await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                        turnSw.ElapsedMilliseconds,
-                        $"Editor finished (agent pass). Why: {Truncate(action.Reason ?? "(no reason)", 400)}",
-                        llmCallId);
-                    return JoinParagraphs(paragraphs);
-
-                case "read_section":
+                consecutiveFailures++;
+                lastToolResult = AgentToolRegistry.AppendFailureBudget(lastToolResult, consecutiveFailures, maxConsecutiveFailures);
+                if (consecutiveFailures >= maxConsecutiveFailures)
                 {
-                    if (action.ParagraphStart is not { } rs || action.ParagraphEnd is not { } re)
-                    {
-                        lastToolResult = "Error: read_section requires paragraphStart and paragraphEnd (inclusive).";
-                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"read_section failed — {lastToolResult}", llmCallId);
-                        break;
-                    }
-
-                    if (rs < 0 || re < rs || re >= paragraphs.Count)
-                    {
-                        lastToolResult =
-                            $"Error: invalid range {rs}..{re} for draft with {paragraphs.Count} paragraphs (valid indices 0..{paragraphs.Count - 1}).";
-                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"read_section failed — {lastToolResult}", llmCallId);
-                        break;
-                    }
-
-                    var slice = paragraphs.Skip(rs).Take(re - rs + 1).ToList();
-                    var body = JoinParagraphs(slice);
-                    readRanges.Add((rs, re));
-                    lastToolResult = $"read_section result (paragraphs {rs}..{re}):\n{body}";
-                    await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                        turnSw.ElapsedMilliseconds,
-                        $"read_section — requested full text for paragraphs {rs}..{re} (inclusive).\nWhy: inspect or prepare before editing.\n\n{Truncate(body, 12_000)}",
-                        llmCallId);
-                    break;
+                    logger.LogWarning("Agentic edit aborted after {Count} consecutive tool failures", consecutiveFailures);
                 }
-
-                case "propose_patch":
-                {
-                    if (action.ParagraphStart is not { } ps || action.ParagraphEnd is not { } pe)
-                    {
-                        lastToolResult = "Error: propose_patch requires paragraphStart and paragraphEnd (inclusive).";
-                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmCallId);
-                        break;
-                    }
-
-                    if (ps < 0 || pe < ps || pe >= paragraphs.Count)
-                    {
-                        lastToolResult =
-                            $"Error: invalid range {ps}..{pe} for draft with {paragraphs.Count} paragraphs (valid indices 0..{paragraphs.Count - 1}).";
-                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmCallId);
-                        break;
-                    }
-
-                    if (ShouldUseSummary(paragraphs) && !IsRangeCoveredByReads(ps, pe, readRanges))
-                    {
-                        lastToolResult =
-                            $"Error: summarized draft view only shows previews. On a prior turn, call read_section with a range that fully covers {ps}..{pe} (inclusive) before propose_patch. Then patch the same indices.";
-                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmCallId);
-                        break;
-                    }
-
-                    var replacement = action.Replacement ?? "";
-                    if (string.IsNullOrWhiteSpace(replacement))
-                    {
-                        lastToolResult = "Error: propose_patch requires non-empty replacement.";
-                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmCallId);
-                        break;
-                    }
-
-                    if (replacement.Length > MaxReplacementChars)
-                    {
-                        lastToolResult =
-                            $"Error: replacement exceeds {MaxReplacementChars} characters.";
-                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmCallId);
-                        break;
-                    }
-
-                    var originalSpan = JoinParagraphs(paragraphs.Skip(ps).Take(pe - ps + 1).ToList());
-                    var originalWords = CountWords(originalSpan);
-                    var replacementWords = CountWords(replacement);
-                    if (originalWords >= 50 && replacementWords < originalWords * 0.55)
-                    {
-                        logger.LogWarning(
-                            "Agentic edit: rejected patch for excessive shortening ({OriginalWords} -> {ReplacementWords} words)",
-                            originalWords, replacementWords);
-                        lastToolResult =
-                            $"Error: replacement is much shorter than the replaced span (~{originalWords} words vs ~{replacementWords}). You must preserve plot and on-page events—tighten wording without deleting beats, or use finish.";
-                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"propose_patch rejected — {lastToolResult}", llmCallId);
-                        break;
-                    }
-
-                    try
-                    {
-                        ApplyPatch(paragraphs, ps, pe, replacement);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(ex, "Agentic edit patch failed");
-                        lastToolResult = $"Error applying patch: {ex.Message}";
-                        await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                            turnSw.ElapsedMilliseconds, $"propose_patch failed — {lastToolResult}", llmCallId);
-                        break;
-                    }
-
-                    readRanges.Clear();
-                    lastToolResult =
-                        $"propose_patch applied: replaced paragraphs {ps}..{pe}. Draft now has {paragraphs.Count} paragraphs.";
-                    var patchDetail = BuildProposePatchProgressDetail(ps, pe, action.Reason, originalSpan, replacement);
-                    await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                        turnSw.ElapsedMilliseconds, patchDetail, llmCallId);
-                    break;
-                }
-
-                default:
-                    lastToolResult = $"Error: unknown action \"{action.Action}\". Use read_section, propose_patch, or finish.";
-                    await NotifyAgentEditProgressAsync(notifier, runId, pipelineElapsedMs, cancellationToken, turn, maxTurns,
-                        turnSw.ElapsedMilliseconds, lastToolResult, llmCallId);
-                    break;
             }
+            else
+            {
+                consecutiveFailures = 0;
+            }
+
+            await AgentEditProgress.NotifyResultAsync(state, turn, maxTurns, kind, toolResult.Status, lastToolResult,
+                llmCallId, turnSw.ElapsedMilliseconds, action);
+            if (toolResult.Status == AgentToolExecuteStatus.Finished)
+                return JoinParagraphs(paragraphs);
+
+            state.LastToolName = kind;
+            if (kind is not ("invoke_writer" or "invoke_editor" or "invoke_corrector"))
+                state.LastDelegatedRole = null;
+
+            if (toolResult.Status != AgentToolExecuteStatus.Finished)
+                state.LastNarrativeHint = AgentEditNarrative.BuildContextForNextTurn(kind, lastToolResult, action, state);
+
+            if (consecutiveFailures >= maxConsecutiveFailures)
+                break;
         }
 
-        logger.LogWarning("Agentic edit stopped after {MaxTurns} turns without finish", maxTurns);
+        if (consecutiveFailures >= maxConsecutiveFailures)
+            logger.LogWarning("Agentic edit stopped after hitting consecutive failure limit ({Max})", maxConsecutiveFailures);
+        else
+            logger.LogWarning("Agentic edit stopped after {MaxTurns} turns without finish", maxTurns);
         return JoinParagraphs(paragraphs);
     }
+
 
     public static List<string> SplitParagraphs(string text)
     {
@@ -325,16 +298,39 @@ public static class AgenticEditLoop
         string sceneInstructions,
         string? expectedEndNotes,
         string worldBlock,
+        string? bookDirectiveBlock,
         int turn,
         int maxTurns,
         int paragraphCount,
         string numberedReference,
         string? lastToolResult,
-        string? paragraphingWarning)
+        string? paragraphingWarning,
+        ComplianceVerdict? openCompliance)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Turn {turn} of {maxTurns} (draft has {paragraphCount} paragraphs, indices 0..{Math.Max(0, paragraphCount - 1)}).");
         sb.AppendLine();
+        if (!string.IsNullOrWhiteSpace(bookDirectiveBlock))
+        {
+            sb.AppendLine(bookDirectiveBlock);
+            sb.AppendLine();
+        }
+
+        if (openCompliance is { Pass: false })
+        {
+            sb.AppendLine("OPEN COMPLIANCE FAILURES (fix these before finish; run_compliance_check again after edits):");
+            foreach (var v in openCompliance.Violations)
+                sb.AppendLine($"  • {v}");
+            if (openCompliance.FixInstructions.Count > 0)
+            {
+                sb.AppendLine("Required fixes:");
+                foreach (var f in openCompliance.FixInstructions)
+                    sb.AppendLine($"  → {f}");
+            }
+
+            sb.AppendLine();
+        }
+
         sb.AppendLine("Scene instructions:");
         sb.AppendLine(sceneInstructions);
         sb.AppendLine();
@@ -392,22 +388,6 @@ public static class AgenticEditLoop
         return s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
     }
 
-    private static async Task NotifyAgentEditProgressAsync(
-        IGenerationProgressNotifier notifier,
-        Guid runId,
-        Func<long> pipelineElapsedMs,
-        CancellationToken cancellationToken,
-        int turn,
-        int maxTurns,
-        long turnMs,
-        string detailBody,
-        Guid llmCallId)
-    {
-        var detail = $"Turn {turn}/{maxTurns}: {detailBody}";
-        await notifier.NotifyAsync(runId, "AgentEditTurn", nameof(PipelineStep.AgentEdit),
-            detail, cancellationToken, pipelineElapsedMs(), turnMs, llmCallId);
-    }
-
     private static string BuildProposePatchProgressDetail(int ps, int pe, string? reason, string originalSpan, string replacement)
     {
         var sb = new StringBuilder();
@@ -422,20 +402,201 @@ public static class AgenticEditLoop
         return sb.ToString();
     }
 
-    private static string Truncate(string s, int max)
+    private sealed class ParagraphEditResult
     {
-        if (s.Length <= max)
-            return s;
-        return s[..max] + "…";
+        public required string ToolResult { get; init; }
     }
 
-}
+    private static Task<ParagraphEditResult> TryApplyParagraphReplacementAsync(
+        List<string> paragraphs,
+        List<(int start, int end)> readRanges,
+        HashSet<string> appliedEditKeys,
+        AgentEditActionDto action,
+        ILogger logger,
+        string source,
+        string? preapprovedEditKey = null)
+    {
+        if (action.ParagraphStart is not { } ps || action.ParagraphEnd is not { } pe)
+        {
+            var err = "Error: requires paragraphStart and paragraphEnd (inclusive).";
+            return Task.FromResult(new ParagraphEditResult { ToolResult = err });
+        }
 
-internal sealed class AgentEditActionDto
-{
-    public string Action { get; set; } = "";
-    public int? ParagraphStart { get; set; }
-    public int? ParagraphEnd { get; set; }
-    public string? Replacement { get; set; }
-    public string? Reason { get; set; }
+        if (ps < 0 || pe < ps || pe >= paragraphs.Count)
+        {
+            var err =
+                $"Error: invalid range {ps}..{pe} for draft with {paragraphs.Count} paragraphs (valid indices 0..{paragraphs.Count - 1}).";
+            return Task.FromResult(new ParagraphEditResult { ToolResult = err });
+        }
+
+        if (ShouldUseSummary(paragraphs) && !IsRangeCoveredByReads(ps, pe, readRanges))
+        {
+            var err =
+                $"Error: summarized draft view only shows previews. On a prior turn, call read_section covering {ps}..{pe} before editing.";
+            return Task.FromResult(new ParagraphEditResult { ToolResult = err });
+        }
+
+        var replacement = action.Replacement ?? "";
+        if (string.IsNullOrWhiteSpace(replacement))
+        {
+            var err = "Error: requires non-empty replacement prose.";
+            return Task.FromResult(new ParagraphEditResult { ToolResult = err });
+        }
+
+        if (replacement.Length > MaxReplacementChars)
+        {
+            var err = $"Error: replacement exceeds {MaxReplacementChars} characters.";
+            return Task.FromResult(new ParagraphEditResult { ToolResult = err });
+        }
+
+        var patchKey = preapprovedEditKey ?? EditKey("patch", ps, pe, replacement);
+        if (appliedEditKeys.Contains(patchKey))
+        {
+            var err =
+                "Error: identical edit on this range was already applied. Change the text or instruction, run_compliance_check, or re-invoke with a revised instruction.";
+            return Task.FromResult(new ParagraphEditResult { ToolResult = err });
+        }
+
+        var originalSpan = JoinParagraphs(paragraphs.Skip(ps).Take(pe - ps + 1).ToList());
+        var originalWords = CountWords(originalSpan);
+        var replacementWords = CountWords(replacement);
+        if (originalWords >= 50 && replacementWords < originalWords * 0.55)
+        {
+            logger.LogWarning(
+                "Agentic edit: rejected {Source} for excessive shortening ({OriginalWords} -> {ReplacementWords} words)",
+                source, originalWords, replacementWords);
+            var err =
+                $"Error: replacement is much shorter than the replaced span (~{originalWords} words vs ~{replacementWords}). Preserve plot and on-page events.";
+            return Task.FromResult(new ParagraphEditResult { ToolResult = err });
+        }
+
+        try
+        {
+            ApplyPatch(paragraphs, ps, pe, replacement);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Agentic edit {Source} patch failed", source);
+            var err = $"Error applying patch: {ex.Message}";
+            return Task.FromResult(new ParagraphEditResult { ToolResult = err });
+        }
+
+        appliedEditKeys.Add(patchKey);
+        readRanges.Clear();
+        var ok =
+            $"{source} applied: replaced paragraphs {ps}..{pe}. Draft now has {paragraphs.Count} paragraphs.";
+        var patchDetail = BuildProposePatchProgressDetail(ps, pe, action.Reason, originalSpan, replacement);
+        return Task.FromResult(new ParagraphEditResult { ToolResult = $"{ok}\n\n{patchDetail}" });
+    }
+
+    private static string FormatComplianceToolResult(ComplianceVerdict verdict)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("compliance_check result:");
+        sb.AppendLine($"  pass: {verdict.Pass.ToString().ToLowerInvariant()}");
+        sb.AppendLine("  violations:");
+        if (verdict.Violations.Count == 0)
+            sb.AppendLine("    (none)");
+        else
+            foreach (var v in verdict.Violations)
+                sb.AppendLine($"    - {v}");
+        sb.AppendLine("  fixInstructions:");
+        if (verdict.FixInstructions.Count == 0)
+            sb.AppendLine("    (none)");
+        else
+            foreach (var f in verdict.FixInstructions)
+                sb.AppendLine($"    - {f}");
+        if (!verdict.Pass)
+        {
+            sb.AppendLine();
+            sb.AppendLine("  next_steps:");
+            sb.AppendLine("    1. read_section each cited paragraph range.");
+            sb.AppendLine("    2. invoke_editor / invoke_writer / invoke_corrector / propose_patch — paste fixInstructions into your instruction (add \"Try again: …\" if re-invoking after a partial fix).");
+            sb.AppendLine("    3. run_compliance_check again. Do NOT finish until pass:true.");
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private static string FormatComplianceMustFixBeforeFinish(ComplianceVerdict verdict)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Error: cannot finish — last compliance check failed. Address every violation, then run_compliance_check until pass:true.");
+        sb.AppendLine("Outstanding violations:");
+        foreach (var v in verdict.Violations)
+            sb.AppendLine($"  • {v}");
+        if (verdict.FixInstructions.Count > 0)
+        {
+            sb.AppendLine("Apply these fixInstructions (quote them in your next invoke_* instruction):");
+            foreach (var f in verdict.FixInstructions)
+                sb.AppendLine($"  → {f}");
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private static AgentWriterInvokeRequest BuildDelegationRequest(
+        IReadOnlyList<string> paragraphs,
+        int paragraphStart,
+        int paragraphEnd,
+        string instruction,
+        ComplianceVerdict? lastCompliance,
+        string? complianceNotes,
+        string? focusExcerpt,
+        int? contextParagraphsBefore,
+        int? contextParagraphsAfter)
+    {
+        var spanText = JoinParagraphs(paragraphs.Skip(paragraphStart).Take(paragraphEnd - paragraphStart + 1).ToList());
+        var before = Math.Clamp(contextParagraphsBefore ?? 0, 0, paragraphStart);
+        var after = Math.Clamp(contextParagraphsAfter ?? 0, 0, Math.Max(0, paragraphs.Count - 1 - paragraphEnd));
+        var contextBefore = before > 0
+            ? JoinParagraphs(paragraphs.Skip(paragraphStart - before).Take(before).ToList())
+            : "";
+        var contextAfter = after > 0
+            ? JoinParagraphs(paragraphs.Skip(paragraphEnd + 1).Take(after).ToList())
+            : "";
+        return new AgentWriterInvokeRequest
+        {
+            ParagraphStart = paragraphStart,
+            ParagraphEnd = paragraphEnd,
+            Instruction = instruction,
+            SpanText = spanText,
+            FullDraft = JoinParagraphs(paragraphs),
+            ComplianceContext = BuildDelegationComplianceContext(lastCompliance, complianceNotes),
+            FocusExcerpt = focusExcerpt?.Trim() ?? "",
+            ContextParagraphsBefore = before,
+            ContextParagraphsAfter = after,
+            ContextBeforeText = contextBefore,
+            ContextAfterText = contextAfter
+        };
+    }
+
+    private static string BuildDelegationComplianceContext(ComplianceVerdict? lastCompliance, string? complianceNotes)
+    {
+        if (!string.IsNullOrWhiteSpace(complianceNotes))
+            return complianceNotes.Trim();
+        if (lastCompliance is null || lastCompliance.Pass)
+            return "";
+        var sb = new StringBuilder();
+        sb.AppendLine("From last compliance check — address every item that applies to this passage:");
+        foreach (var v in lastCompliance.Violations)
+            sb.AppendLine($"- Violation: {v}");
+        foreach (var f in lastCompliance.FixInstructions)
+            sb.AppendLine($"- Fix: {f}");
+        return sb.ToString().TrimEnd();
+    }
+
+    internal static string AppendPostEditGuidance(string toolResult) =>
+        toolResult
+        + "\n\nDraft edited — compliance status is stale. run_compliance_check. If pass:false, re-invoke with a NEW instruction quoting remaining fixInstructions (e.g. \"Try again: except convert all verbs to past tense …\").";
+
+    internal static string EditKey(string kind, int start, int end, string payload) =>
+        $"{kind}:{start}:{end}:{payload.Trim()}";
+
+    private static string HashDraft(string draft)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(draft));
+        return Convert.ToHexString(bytes);
+    }
+
 }

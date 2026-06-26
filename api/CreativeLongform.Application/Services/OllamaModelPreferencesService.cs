@@ -84,6 +84,14 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
             row.PostStateModel = string.IsNullOrEmpty(t) ? null : t;
         }
 
+        if (patch.ClearEditor == true)
+            row.EditorModel = null;
+        else if (patch.EditorModel is { } ed)
+        {
+            var t = ed.Trim();
+            row.EditorModel = string.IsNullOrEmpty(t) ? null : t;
+        }
+
         string? prevBaseUrl = row.BaseUrl;
         if (patch.ClearBaseUrl == true)
             row.BaseUrl = null;
@@ -120,6 +128,7 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
         Log(OllamaModelRole.WorldBuilding, before.WorldBuildingModel, after.WorldBuildingModel);
         Log(OllamaModelRole.PreState, before.PreStateModel, after.PreStateModel);
         Log(OllamaModelRole.PostState, before.PostStateModel, after.PostStateModel);
+        Log(OllamaModelRole.Editor, before.EditorModel, after.EditorModel);
 
         var afterConnection = await GetConnectionSettingsAsync(cancellationToken);
         var prevNorm = string.IsNullOrWhiteSpace(prevBaseUrl) ? null : OllamaBaseUrlHelper.NormalizeApiRoot(prevBaseUrl);
@@ -227,6 +236,15 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
         return EffectivePostState(row, o);
     }
 
+    public async Task<string> GetEditorModelAsync(CancellationToken cancellationToken = default)
+    {
+        await EnsureSingletonAsync(cancellationToken);
+        var row = await _db.OllamaModelPreferences.AsNoTracking()
+            .FirstAsync(x => x.Id == OllamaModelPreferences.SingletonId, cancellationToken);
+        var o = _options.Value;
+        return EffectiveEditor(row, o);
+    }
+
     private OllamaModelAssignmentsDto ToDto(OllamaModelPreferences row)
     {
         var o = _options.Value;
@@ -236,6 +254,7 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
         var wb = EffectiveWorldBuilding(row, o);
         var pre = EffectivePreState(row, o);
         var post = EffectivePostState(row, o);
+        var editor = EffectiveEditor(row, o);
         var overridden = new List<OllamaModelRole>();
         if (!string.IsNullOrWhiteSpace(row.WriterModel)) overridden.Add(OllamaModelRole.Writer);
         if (!string.IsNullOrWhiteSpace(row.CriticModel)) overridden.Add(OllamaModelRole.Critic);
@@ -243,6 +262,7 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
         if (!string.IsNullOrWhiteSpace(row.WorldBuildingModel)) overridden.Add(OllamaModelRole.WorldBuilding);
         if (!string.IsNullOrWhiteSpace(row.PreStateModel)) overridden.Add(OllamaModelRole.PreState);
         if (!string.IsNullOrWhiteSpace(row.PostStateModel)) overridden.Add(OllamaModelRole.PostState);
+        if (!string.IsNullOrWhiteSpace(row.EditorModel)) overridden.Add(OllamaModelRole.Editor);
         return new OllamaModelAssignmentsDto
         {
             WriterModel = writer,
@@ -251,6 +271,7 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
             WorldBuildingModel = wb,
             PreStateModel = pre,
             PostStateModel = post,
+            EditorModel = editor,
             DbOverriddenRoles = overridden.ToArray()
         };
     }
@@ -294,6 +315,15 @@ public sealed class OllamaModelPreferencesService : IOllamaModelPreferencesServi
             return row.PostStateModel.Trim();
         if (!string.IsNullOrWhiteSpace(o.PostStateModel))
             return o.PostStateModel.Trim();
+        return EffectiveWriter(row);
+    }
+
+    private string EffectiveEditor(OllamaModelPreferences row, OllamaOptions o)
+    {
+        if (!string.IsNullOrWhiteSpace(row.EditorModel))
+            return row.EditorModel.Trim();
+        if (!string.IsNullOrWhiteSpace(o.EditorModel))
+            return o.EditorModel.Trim();
         return EffectiveWriter(row);
     }
 

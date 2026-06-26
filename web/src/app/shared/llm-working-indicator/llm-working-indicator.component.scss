@@ -12,6 +12,16 @@
   flex-direction: column;
   gap: 0.4rem;
   pointer-events: none;
+
+  &.clf-llm-banner--inline {
+    position: static;
+    z-index: auto;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    pointer-events: auto;
+  }
 }
 
 .clf-llm-banner__row {

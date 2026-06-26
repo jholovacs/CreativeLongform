@@ -1,5 +1,8 @@
 using CreativeLongform.Application.Abstractions;
+using CreativeLongform.Application.Generation;
 using CreativeLongform.Application.Services;
+using CreativeLongform.Domain.Entities;
+using CreativeLongform.Domain.Enums;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CreativeLongform.Application.Tests;
@@ -139,6 +142,250 @@ public class AgenticEditLoopTests
         Assert.Contains("New.", result, StringComparison.Ordinal);
         Assert.Contains("Keep.", result, StringComparison.Ordinal);
         Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task RunAsync_query_lore_returns_catalog_matches()
+    {
+        var bookId = Guid.NewGuid();
+        var book = new Book { Id = bookId, Title = "T" };
+        var el = new WorldElement
+        {
+            Id = Guid.NewGuid(),
+            BookId = bookId,
+            Kind = WorldElementKind.Lore,
+            Title = "Old Treaty",
+            Summary = "Banned magic clause"
+        };
+        var lore = AgentLoreCatalog.Create(book, [el], [], [el], []);
+        var calls = 0;
+        var result = await AgenticEditLoop.RunAsync(
+            "Draft.\n\nEnd.",
+            "instr",
+            null,
+            "world",
+            maxTurns: 4,
+            NullLogger.Instance,
+            (_, _, _) =>
+            {
+                calls++;
+                return Task.FromResult(calls switch
+                {
+                    1 => ("""{"action":"query_lore","query":"Treaty","scope":"scene"}""", "", Guid.Empty),
+                    _ => ("""{"action":"finish","reason":"ok"}""", "", Guid.Empty)
+                });
+            },
+            new NoopNotifier(),
+            Guid.NewGuid(),
+            () => 0L,
+            CancellationToken.None,
+            new AgentEditRunOptions { Lore = lore });
+
+        Assert.Contains("Draft.", result, StringComparison.Ordinal);
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task RunAsync_rejects_duplicate_propose_patch()
+    {
+        var calls = 0;
+        var patch = """{"action":"propose_patch","paragraphStart":0,"paragraphEnd":0,"replacement":"New."}""";
+        await AgenticEditLoop.RunAsync(
+            "Old.\n\nKeep.",
+            "instr",
+            null,
+            "world",
+            maxTurns: 6,
+            NullLogger.Instance,
+            (_, _, _) =>
+            {
+                calls++;
+                return Task.FromResult(calls switch
+                {
+                    <= 2 => (patch, "", Guid.Empty),
+                    _ => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty)
+                });
+            },
+            new NoopNotifier(),
+            Guid.NewGuid(),
+            () => 0L,
+            CancellationToken.None);
+
+        Assert.Equal(3, calls);
+    }
+
+    [Fact]
+    public async Task RunAsync_finish_rejected_until_compliance_passes()
+    {
+        var calls = 0;
+        var result = await AgenticEditLoop.RunAsync(
+            "Hello.",
+            "instr",
+            null,
+            "world",
+            maxTurns: 5,
+            NullLogger.Instance,
+            (_, _, _) =>
+            {
+                calls++;
+                return Task.FromResult(calls switch
+                {
+                    1 => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty),
+                    2 => ("""{"action":"run_compliance_check"}""", "", Guid.Empty),
+                    _ => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty)
+                });
+            },
+            new NoopNotifier(),
+            Guid.NewGuid(),
+            () => 0L,
+            CancellationToken.None,
+            new AgentEditRunOptions
+            {
+                RunComplianceAsync = (_, _) => Task.FromResult(new ComplianceVerdict
+                {
+                    Pass = true,
+                    Violations = new List<string>(),
+                    FixInstructions = new List<string>()
+                })
+            });
+
+        Assert.Equal(3, calls);
+        Assert.Equal("Hello.", result);
+    }
+
+    [Fact]
+    public async Task RunAsync_finish_rejected_when_compliance_fails()
+    {
+        var calls = 0;
+        await AgenticEditLoop.RunAsync(
+            "Hello.",
+            "instr",
+            null,
+            "world",
+            maxTurns: 4,
+            NullLogger.Instance,
+            (_, _, _) =>
+            {
+                calls++;
+                return Task.FromResult(calls switch
+                {
+                    1 => ("""{"action":"run_compliance_check"}""", "", Guid.Empty),
+                    2 => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty),
+                    _ => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty)
+                });
+            },
+            new NoopNotifier(),
+            Guid.NewGuid(),
+            () => 0L,
+            CancellationToken.None,
+            new AgentEditRunOptions
+            {
+                RunComplianceAsync = (_, _) => Task.FromResult(new ComplianceVerdict
+                {
+                    Pass = false,
+                    Violations = new List<string> { "Wrong tense in ¶0" },
+                    FixInstructions = new List<string> { "Convert to past tense" }
+                })
+            });
+
+        Assert.Equal(4, calls);
+    }
+
+    [Fact]
+    public async Task RunAsync_run_script_applies_chained_replace_steps()
+    {
+        var calls = 0;
+        var result = await AgenticEditLoop.RunAsync(
+            "Alpha beta.\n\nGamma delta.",
+            "instr",
+            null,
+            "world",
+            maxTurns: 3,
+            NullLogger.Instance,
+            (_, _, _) =>
+            {
+                calls++;
+                return Task.FromResult(calls switch
+                {
+                    1 => ("""
+                        {
+                          "action": "run_script",
+                          "reason": "mechanical fixes",
+                          "steps": [
+                            { "action": "replace_text", "pattern": "Alpha", "replacement": "One" },
+                            { "action": "replace_text", "pattern": "Gamma", "replacement": "Two" }
+                          ]
+                        }
+                        """, "", Guid.Empty),
+                    _ => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty)
+                });
+            },
+            new NoopNotifier(),
+            Guid.NewGuid(),
+            () => 0L,
+            CancellationToken.None);
+
+        Assert.Equal(2, calls);
+        Assert.Contains("One beta.", result, StringComparison.Ordinal);
+        Assert.Contains("Two delta.", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunAsync_unknown_action_aborts_after_consecutive_failure_budget()
+    {
+        var calls = 0;
+        await AgenticEditLoop.RunAsync(
+            "Hello.",
+            "instr",
+            null,
+            "world",
+            maxTurns: 10,
+            NullLogger.Instance,
+            (_, _, _) =>
+            {
+                calls++;
+                return Task.FromResult(("""{"action":"not_a_real_tool"}""", "", Guid.Empty));
+            },
+            new NoopNotifier(),
+            Guid.NewGuid(),
+            () => 0L,
+            CancellationToken.None,
+            new AgentEditRunOptions { MaxConsecutiveToolFailures = 3 });
+
+        Assert.Equal(3, calls);
+    }
+
+    [Fact]
+    public async Task RunAsync_consecutive_failures_reset_after_successful_tool()
+    {
+        var calls = 0;
+        await AgenticEditLoop.RunAsync(
+            "Hello.",
+            "instr",
+            null,
+            "world",
+            maxTurns: 10,
+            NullLogger.Instance,
+            (_, _, _) =>
+            {
+                calls++;
+                return Task.FromResult(calls switch
+                {
+                    1 => ("""{"action":"not_a_real_tool"}""", "", Guid.Empty),
+                    2 => ("""{"action":"read_section","paragraphStart":0,"paragraphEnd":0}""", "", Guid.Empty),
+                    3 => ("""{"action":"not_a_real_tool"}""", "", Guid.Empty),
+                    4 => ("""{"action":"not_a_real_tool"}""", "", Guid.Empty),
+                    5 => ("""{"action":"not_a_real_tool"}""", "", Guid.Empty),
+                    _ => ("""{"action":"finish","reason":"done"}""", "", Guid.Empty)
+                });
+            },
+            new NoopNotifier(),
+            Guid.NewGuid(),
+            () => 0L,
+            CancellationToken.None,
+            new AgentEditRunOptions { MaxConsecutiveToolFailures = 3 });
+
+        Assert.Equal(5, calls);
     }
 
     private sealed class NoopNotifier : IGenerationProgressNotifier

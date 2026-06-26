@@ -8,6 +8,9 @@ public sealed class OllamaOptions
     public string WriterModel { get; set; } = "llama3.2";
     public string CriticModel { get; set; } = "llama3.2";
 
+    /// <summary>Grammar/punctuation correction when unset; null means use <see cref="CriticModel"/>.</summary>
+    public string? CorrectionModel { get; set; }
+
     /// <summary>Default agentic-edit model when DB preference is unset; null means use <see cref="WriterModel"/>.</summary>
     public string? AgentModel { get; set; }
 
@@ -19,6 +22,9 @@ public sealed class OllamaOptions
 
     /// <summary>Post-state JSON when DB preference is unset; null means use <see cref="WriterModel"/>.</summary>
     public string? PostStateModel { get; set; }
+
+    /// <summary>Light prose touch-ups when DB preference is unset; null means use <see cref="WriterModel"/>.</summary>
+    public string? EditorModel { get; set; }
 
     /// <summary>
     /// Host path shared with the Ollama container for GGUF staging (URL import). Same path must be mounted in both services
@@ -47,14 +53,20 @@ public sealed class OllamaOptions
     /// <summary>If the first draft is shorter than DraftMinWords, run one expansion pass.</summary>
     public bool DraftExpandIfShort { get; set; } = true;
 
-    /// <summary>Run autonomous agentic paragraph-level edit loop after the initial draft (before post-state). Off by default; use on-demand draft recommendations in the UI instead.</summary>
-    public bool AgenticEditEnabled { get; set; } = false;
+    /// <summary>Run orchestrating agent edit loop after the initial draft (lore lookup, compliance, writer delegation, targeted patches).</summary>
+    public bool AgenticEditEnabled { get; set; } = true;
 
     /// <summary>Max LLM turns in the agentic edit loop (each turn is one tool JSON response).</summary>
-    public int AgenticEditMaxTurns { get; set; } = 8;
+    public int AgenticEditMaxTurns { get; set; } = 16;
 
     /// <summary>Ollama num_predict for each agentic edit JSON turn.</summary>
     public int AgenticEditNumPredict { get; set; } = 2048;
+
+    /// <summary>Max compliance checks per agent edit session (each check is one critic LLM call).</summary>
+    public int AgenticEditMaxComplianceChecks { get; set; } = 8;
+
+    /// <summary>Abort agent edit loop after this many consecutive tool/JSON failures.</summary>
+    public int AgenticEditMaxConsecutiveFailures { get; set; } = 5;
 
     /// <summary>When false, the prose quality critic loop is skipped for all runs (compliance still runs). Per-run override: GenerationStartOptions.SkipQualityGate.</summary>
     public bool QualityGateEnabled { get; set; } = true;

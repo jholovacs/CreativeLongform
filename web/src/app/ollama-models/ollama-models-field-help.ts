@@ -20,6 +20,8 @@ export const OLLAMA_MODELS_FIELD_HELP = {
     'Model for inferring beginning narrative state JSON when you do not supply it and there is no prior scene to copy from. JSON-only; can differ from the prose writer.',
   postState:
     'Model for deriving end-of-scene narrative state JSON from the draft (and on finalize/correct when post-state is recomputed). JSON-only.',
+  editor:
+    'Model for light prose touch-ups in the agent loop: tense or perspective/POV shifts, markdown decoration, and minimal rephrasing without rewriting plot.',
 
   pullModel:
     'Library tag to pull with ollama pull on the server (e.g. llama3.2, mistral). Large downloads can take many minutes.',
@@ -34,6 +36,7 @@ export const OLLAMA_MODELS_FIELD_HELP = {
   tagPickWorldBuilding: 'World-building slot',
   tagPickPreState: 'Pre-state slot',
   tagPickPostState: 'Post-state slot',
+  tagPickEditor: 'Editor slot',
 
   saveAssignments:
     'Persist all model assignment fields to the database. Empty fields clear the DB override for that role (falls back to appsettings / env).',
@@ -43,6 +46,7 @@ export const OLLAMA_MODELS_FIELD_HELP = {
   useDefaultWorldBuilding: 'Remove DB override for World-building; use Ollama:WorldBuildingModel or Writer.',
   useDefaultPreState: 'Remove DB override for Pre-state; use Ollama:PreStateModel or Writer.',
   useDefaultPostState: 'Remove DB override for Post-state; use Ollama:PostStateModel or Writer.',
+  useDefaultEditor: 'Remove DB override for Editor; use Ollama:EditorModel or Writer.',
 
   pullButton:
     'Download the model from the Ollama library into the server’s Ollama store (same as ollama pull). Progress streams from the server; the bar shows layer byte progress when Ollama reports totals.',

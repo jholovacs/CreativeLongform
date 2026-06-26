@@ -54,6 +54,7 @@ export class OllamaModelsComponent implements OnInit {
   worldBuildingInput = '';
   preStateInput = '';
   postStateInput = '';
+  editorInput = '';
   baseUrlInput = '';
   connectionTestMessage: string | null = null;
   connectionTestOk: boolean | null = null;
@@ -217,6 +218,7 @@ export class OllamaModelsComponent implements OnInit {
         this.worldBuildingInput = p.assignments.worldBuildingModel;
         this.preStateInput = p.assignments.preStateModel;
         this.postStateInput = p.assignments.postStateModel;
+        this.editorInput = p.assignments.editorModel;
         this.baseUrlInput = p.connection.effectiveBaseUrl;
         this.connectionTestMessage = null;
         this.connectionTestOk = null;
@@ -307,6 +309,7 @@ export class OllamaModelsComponent implements OnInit {
           worldBuildingModel: this.worldBuildingInput.trim(),
           preStateModel: this.preStateInput.trim(),
           postStateModel: this.postStateInput.trim(),
+          editorModel: this.editorInput.trim(),
           baseUrl: this.baseUrlInput.trim()
         };
     this.busy = true;
@@ -368,14 +371,15 @@ export class OllamaModelsComponent implements OnInit {
     );
   }
 
-  clearSlot(role: 'writer' | 'critic' | 'agent' | 'worldBuilding' | 'preState' | 'postState'): void {
+  clearSlot(role: 'writer' | 'critic' | 'agent' | 'worldBuilding' | 'preState' | 'postState' | 'editor'): void {
     const body: OllamaModelAssignmentsPatch = {
       clearWriter: role === 'writer',
       clearCritic: role === 'critic',
       clearAgent: role === 'agent',
       clearWorldBuilding: role === 'worldBuilding',
       clearPreState: role === 'preState',
-      clearPostState: role === 'postState'
+      clearPostState: role === 'postState',
+      clearEditor: role === 'editor'
     };
     this.busy = true;
     this.inlineError = null;
@@ -452,7 +456,8 @@ export class OllamaModelsComponent implements OnInit {
       a.agentModel,
       a.worldBuildingModel,
       a.preStateModel,
-      a.postStateModel
+      a.postStateModel,
+      a.editorModel
     ];
     return slots.some((s) => String(s ?? '').trim() === name);
   }
@@ -494,14 +499,15 @@ export class OllamaModelsComponent implements OnInit {
 
   pickInstalled(
     name: string,
-    slot: 'writer' | 'critic' | 'agent' | 'worldBuilding' | 'preState' | 'postState'
+    slot: 'writer' | 'critic' | 'agent' | 'worldBuilding' | 'preState' | 'postState' | 'editor'
   ): void {
     if (slot === 'writer') this.writerInput = name;
     else if (slot === 'critic') this.criticInput = name;
     else if (slot === 'agent') this.agentInput = name;
     else if (slot === 'worldBuilding') this.worldBuildingInput = name;
     else if (slot === 'preState') this.preStateInput = name;
-    else this.postStateInput = name;
+    else if (slot === 'postState') this.postStateInput = name;
+    else this.editorInput = name;
   }
 
   /** Installed Ollama tags (sorted) for assignment dropdowns. */
@@ -543,6 +549,8 @@ export class OllamaModelsComponent implements OnInit {
         return 'Post-state';
       case 6:
         return 'Connection';
+      case 7:
+        return 'Editor';
       default:
         return String(role);
     }
